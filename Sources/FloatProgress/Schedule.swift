@@ -8,10 +8,7 @@ struct ScheduleSnapshot: Equatable {
     }
 
     let phase: Phase
-    let progress: Double
     let remaining: TimeInterval
-    let start: Date
-    let end: Date
 }
 
 enum Schedule {
@@ -44,31 +41,45 @@ enum Schedule {
         if now < effectiveStart {
             return ScheduleSnapshot(
                 phase: .waiting,
-                progress: 0,
-                remaining: effectiveStart.timeIntervalSince(now),
-                start: effectiveStart,
-                end: effectiveEnd
+                remaining: effectiveStart.timeIntervalSince(now)
             )
         }
 
         if now >= effectiveEnd {
             return ScheduleSnapshot(
                 phase: .finished,
-                progress: 1,
-                remaining: 0,
-                start: effectiveStart,
-                end: effectiveEnd
+                remaining: 0
             )
         }
 
-        let duration = effectiveEnd.timeIntervalSince(effectiveStart)
-        let elapsed = now.timeIntervalSince(effectiveStart)
         return ScheduleSnapshot(
             phase: .running,
-            progress: min(max(elapsed / duration, 0), 1),
-            remaining: max(effectiveEnd.timeIntervalSince(now), 0),
-            start: effectiveStart,
-            end: effectiveEnd
+            remaining: max(effectiveEnd.timeIntervalSince(now), 0)
         )
+    }
+
+    /// The next instant at which the schedule phase can change. Keeping this
+    /// calculation separate lets the app sleep between meaningful updates.
+    static func nextTransition(
+        after now: Date,
+        startMinutes: Int,
+        endMinutes: Int,
+        calendar: Calendar = .current
+    ) -> Date {
+        let dayStart = calendar.startOfDay(for: now)
+        let start = calendar.date(byAdding: .minute, value: startMinutes, to: dayStart) ?? dayStart
+        let end = calendar.date(byAdding: .minute, value: endMinutes, to: dayStart) ?? dayStart
+
+        if endMinutes > startMinutes {
+            if now < start { return start }
+            if now < end { return end }
+            let tomorrow = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
+            return calendar.date(byAdding: .minute, value: startMinutes, to: tomorrow) ?? tomorrow
+        }
+
+        if now < end { return end }
+        if now < start { return start }
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
+        return calendar.date(byAdding: .minute, value: endMinutes, to: tomorrow) ?? tomorrow
     }
 }

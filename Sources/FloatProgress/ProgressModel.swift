@@ -1,65 +1,155 @@
 import AppKit
 import Combine
 import Foundation
+import ServiceManagement
 import SwiftUI
+
+enum CowMood: Hashable {
+    case resting
+    case focused
+    case expectant
+    case relaxed
+}
 
 @MainActor
 final class ProgressModel: ObservableObject {
     private enum Key {
+        static let settingsSchemaVersion = "settingsSchemaVersion"
         static let startMinutes = "startMinutes"
         static let endMinutes = "endMinutes"
-        static let circleSize = "circleSize"
+        // Keep the existing preference keys so updates preserve each user's appearance.
+        static let widgetSize = "circleSize"
+        static let showCowEars = "showCowEars"
+        static let waitingLabel = "waitingLabel"
         static let centerLabel = "centerLabel"
         static let completedLabel = "completedLabel"
+        static let waitingLabelRGB = "waitingLabelRGB"
         static let centerLabelRGB = "centerLabelRGB"
         static let completedLabelRGB = "completedLabelRGB"
         static let textColorVersion = "textColorVersion"
         static let showSeconds = "showSeconds"
         static let showFloatingPanel = "showFloatingPanel"
         static let showMenuBarRemaining = "showMenuBarRemaining"
+        static let lockPanelPosition = "lockPanelPosition"
         static let panelOpacity = "panelOpacity"
         static let backgroundRGB = "backgroundRGB"
-        static let backgroundOpacity = "backgroundOpacity"
-        static let progressRGB = "progressRGB"
-        static let progressOpacity = "progressOpacity"
-        static let trackRGB = "trackRGB"
-        static let trackOpacity = "trackOpacity"
-        static let beaconRGB = "beaconRGB"
-        static let beaconDiameter = "beaconDiameter"
-        static let beaconSizeVersion = "beaconSizeVersion"
+        static let accentRGB = "progressRGB"
+        static let restUntil = "restUntil"
+        // Legacy key from the first one-day-rest implementation.
+        static let restDay = "restDay"
+    }
+
+    static let currentSettingsSchemaVersion = 2
+
+    private enum DefaultValue {
+        static let startMinutes = 9 * 60
+        static let endMinutes = 18 * 60
+        static let widgetSize = 62.0
+        static let panelOpacity = 0.90
+        static let waitingLabel = "待命"
+        static let centerLabel = "牛马"
+        static let completedLabel = "下班"
+        static let waitingLabelRGB = 0x4338CA
+        static let centerLabelRGB = 0x4338CA
+        static let completedLabelRGB = 0x059669
+        static let backgroundRGB = 0xE9ECF5
+        static let accentRGB = 0x5856D6
     }
 
     private let defaults: UserDefaults
     private var timer: Timer?
+    private var isCoreHovered = false
 
     @Published var now = Date()
     @Published var startMinutes: Int { didSet { defaults.set(startMinutes, forKey: Key.startMinutes); refresh() } }
     @Published var endMinutes: Int { didSet { defaults.set(endMinutes, forKey: Key.endMinutes); refresh() } }
-    @Published var circleSize: Double { didSet { defaults.set(circleSize, forKey: Key.circleSize) } }
+    @Published var widgetSize: Double { didSet { defaults.set(widgetSize, forKey: Key.widgetSize) } }
+    @Published var showCowEars: Bool { didSet { defaults.set(showCowEars, forKey: Key.showCowEars); scheduleNextRefresh() } }
+    @Published var waitingLabel: String { didSet { defaults.set(waitingLabel, forKey: Key.waitingLabel) } }
     @Published var centerLabel: String { didSet { defaults.set(centerLabel, forKey: Key.centerLabel) } }
     @Published var completedLabel: String { didSet { defaults.set(completedLabel, forKey: Key.completedLabel) } }
+    @Published var waitingLabelRGB: Int { didSet { defaults.set(waitingLabelRGB, forKey: Key.waitingLabelRGB) } }
     @Published var centerLabelRGB: Int { didSet { defaults.set(centerLabelRGB, forKey: Key.centerLabelRGB) } }
     @Published var completedLabelRGB: Int { didSet { defaults.set(completedLabelRGB, forKey: Key.completedLabelRGB) } }
-    @Published var showSeconds: Bool { didSet { defaults.set(showSeconds, forKey: Key.showSeconds) } }
-    @Published var showFloatingPanel: Bool { didSet { defaults.set(showFloatingPanel, forKey: Key.showFloatingPanel) } }
-    @Published var showMenuBarRemaining: Bool { didSet { defaults.set(showMenuBarRemaining, forKey: Key.showMenuBarRemaining) } }
+    @Published var showSeconds: Bool { didSet { defaults.set(showSeconds, forKey: Key.showSeconds); scheduleNextRefresh() } }
+    @Published var showFloatingPanel: Bool {
+        didSet {
+            defaults.set(showFloatingPanel, forKey: Key.showFloatingPanel)
+            if !showFloatingPanel { isCoreHovered = false }
+            scheduleNextRefresh()
+        }
+    }
+    @Published var showMenuBarRemaining: Bool { didSet { defaults.set(showMenuBarRemaining, forKey: Key.showMenuBarRemaining); scheduleNextRefresh() } }
+    @Published var lockPanelPosition: Bool { didSet { defaults.set(lockPanelPosition, forKey: Key.lockPanelPosition) } }
     @Published var panelOpacity: Double { didSet { defaults.set(panelOpacity, forKey: Key.panelOpacity) } }
     @Published var backgroundRGB: Int { didSet { defaults.set(backgroundRGB, forKey: Key.backgroundRGB) } }
-    @Published var backgroundOpacity: Double { didSet { defaults.set(backgroundOpacity, forKey: Key.backgroundOpacity) } }
-    @Published var progressRGB: Int { didSet { defaults.set(progressRGB, forKey: Key.progressRGB) } }
-    @Published var progressOpacity: Double { didSet { defaults.set(progressOpacity, forKey: Key.progressOpacity) } }
-    @Published var trackRGB: Int { didSet { defaults.set(trackRGB, forKey: Key.trackRGB) } }
-    @Published var trackOpacity: Double { didSet { defaults.set(trackOpacity, forKey: Key.trackOpacity) } }
-    @Published var beaconRGB: Int { didSet { defaults.set(beaconRGB, forKey: Key.beaconRGB) } }
-    @Published var beaconDiameter: Double { didSet { defaults.set(beaconDiameter, forKey: Key.beaconDiameter) } }
+    @Published var accentRGB: Int { didSet { defaults.set(accentRGB, forKey: Key.accentRGB) } }
+    @Published private(set) var restUntil: Date? {
+        didSet {
+            if let restUntil {
+                defaults.set(restUntil, forKey: Key.restUntil)
+            } else {
+                defaults.removeObject(forKey: Key.restUntil)
+            }
+        }
+    }
+    @Published private(set) var launchAtLoginEnabled: Bool
+    @Published private(set) var launchAtLoginNeedsApproval: Bool
+    @Published private(set) var launchAtLoginError: String?
+
+    var isRestingToday: Bool {
+        guard let restUntil else { return false }
+        return now < restUntil
+    }
+
+    func toggleRestToday() {
+        restUntil = isRestingToday
+            ? nil
+            : Self.restDeadline(now: now, startMinutes: startMinutes, endMinutes: endMinutes)
+        refresh()
+    }
+
+    var restResumeText: String? {
+        guard isRestingToday, let restUntil else { return nil }
+        return restUntil.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+    }
+
+    static func restDeadline(
+        now: Date,
+        startMinutes: Int,
+        endMinutes: Int,
+        calendar: Calendar = .current
+    ) -> Date {
+        let today = calendar.startOfDay(for: now)
+        guard endMinutes <= startMinutes else {
+            return calendar.date(byAdding: .day, value: 1, to: today) ?? now.addingTimeInterval(86_400)
+        }
+
+        let components = calendar.dateComponents([.hour, .minute], from: now)
+        let currentMinutes = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+        let endDayOffset = currentMinutes < endMinutes ? 0 : 1
+        let endDay = calendar.date(byAdding: .day, value: endDayOffset, to: today) ?? today
+        return calendar.date(byAdding: .minute, value: endMinutes, to: endDay) ?? now
+    }
 
     var snapshot: ScheduleSnapshot {
         Schedule.snapshot(now: now, startMinutes: startMinutes, endMinutes: endMinutes)
     }
 
+    var cowMood: CowMood {
+        if isRestingToday { return .resting }
+        let state = snapshot
+        switch state.phase {
+        case .waiting: return .resting
+        case .running: return state.remaining <= 5 * 60 ? .expectant : .focused
+        case .finished: return .relaxed
+        }
+    }
+
     /// Keep the final second visible until the actual end time. Waiting for a
     /// schedule to start does not trigger the final-minute countdown.
     var finalMinuteSeconds: Int? {
+        guard !isRestingToday else { return nil }
         let state = snapshot
         guard state.phase == .running,
               state.remaining > 0,
@@ -79,37 +169,62 @@ final class ProgressModel: ObservableObject {
 
     var backgroundSwiftUIColor: SwiftUI.Color { color(from: backgroundRGB) }
     var centerLabelSwiftUIColor: SwiftUI.Color { color(from: centerLabelRGB) }
+    var waitingLabelSwiftUIColor: SwiftUI.Color { color(from: waitingLabelRGB) }
     var completedLabelSwiftUIColor: SwiftUI.Color { color(from: completedLabelRGB) }
-    var progressSwiftUIColor: SwiftUI.Color { color(from: progressRGB) }
-    var trackSwiftUIColor: SwiftUI.Color { color(from: trackRGB) }
-    var beaconSwiftUIColor: SwiftUI.Color { color(from: beaconRGB) }
+    var accentSwiftUIColor: SwiftUI.Color { color(from: accentRGB) }
 
-    /// The visual orbit keeps its configured diameter. The transparent window
-    /// grows only when a large beacon would otherwise extend beyond its bounds.
-    var effectiveWidgetSize: Double {
-        let orbitInset = max(circleSize * 0.11, 4)
-        let overflow = max(beaconDiameter / 2 - orbitInset + 1, 0)
-        return circleSize + overflow * 2
+    var effectivePanelSize: NSSize {
+        CowLayout.panelSize(for: CGFloat(widgetSize), showsEars: showCowEars)
     }
 
-    var backgroundTextColor: SwiftUI.Color {
-        let red = Double((backgroundRGB >> 16) & 0xFF) / 255
-        let green = Double((backgroundRGB >> 8) & 0xFF) / 255
-        let blue = Double(backgroundRGB & 0xFF) / 255
-        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        return luminance > 0.56 ? .black : .white
+    var coreHoverTime: String {
+        let total = max(Int(snapshot.remaining.rounded(.down)), 0)
+        if showCowEars { return String(format: "%02d", total % 60) }
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        if hours > 0 { return String(format: "%02d:%02d", hours, minutes) }
+        return String(format: "%02d:%02d", minutes, total % 60)
+    }
+
+    var coreHoverHasTime: Bool {
+        !isRestingToday && snapshot.phase != .finished
+    }
+
+    var earTime: (hours: String, minutes: String)? {
+        guard !isRestingToday else { return nil }
+        let state = snapshot
+        if state.phase == .finished { return nil }
+        // During the dedicated 60→1 core countdown, ear digits would mix
+        // minute rounding with a standalone seconds value (and flicker between
+        // 00 and 01 on hover). Keep the ear shapes, but let the core own time.
+        if finalMinuteSeconds != nil { return nil }
+        if state.phase == .waiting, !isCoreHovered {
+            return (
+                String(format: "%02d", startMinutes / 60),
+                String(format: "%02d", startMinutes % 60)
+            )
+        }
+        let remainingMinutes = isCoreHovered
+            ? max(Int(state.remaining.rounded(.down)) / 60, 0)
+            : max(Int(ceil(state.remaining / 60)), 0)
+        return (
+            String(format: "%02d", remainingMinutes / 60),
+            String(format: "%02d", remainingMinutes % 60)
+        )
     }
 
     var statusText: String {
-        switch snapshot.phase {
+        if isRestingToday { return "休息" }
+        return switch snapshot.phase {
         case .waiting: "距开始 \(format(snapshot.remaining))"
         case .running: "剩余 \(format(snapshot.remaining))"
-        case .finished: "今日完成"
+        case .finished: "完成"
         }
     }
 
     var compactStatusText: String {
-        switch snapshot.phase {
+        if isRestingToday { return "休息" }
+        return switch snapshot.phase {
         case .waiting: "\(formatCompact(snapshot.remaining)) 后开始"
         case .running: formatCompact(snapshot.remaining)
         case .finished: "完成"
@@ -119,57 +234,120 @@ final class ProgressModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         defaults.register(defaults: [
-            Key.startMinutes: 9 * 60,
-            Key.endMinutes: 18 * 60,
-            Key.circleSize: 56.0,
-            Key.centerLabel: "牛马",
-            Key.completedLabel: "下班",
-            Key.centerLabelRGB: 0x4338CA,
-            Key.completedLabelRGB: 0x059669,
+            Key.settingsSchemaVersion: 0,
+            Key.startMinutes: DefaultValue.startMinutes,
+            Key.endMinutes: DefaultValue.endMinutes,
+            Key.widgetSize: DefaultValue.widgetSize,
+            Key.showCowEars: true,
+            Key.waitingLabel: DefaultValue.waitingLabel,
+            Key.centerLabel: DefaultValue.centerLabel,
+            Key.completedLabel: DefaultValue.completedLabel,
+            Key.waitingLabelRGB: DefaultValue.waitingLabelRGB,
+            Key.centerLabelRGB: DefaultValue.centerLabelRGB,
+            Key.completedLabelRGB: DefaultValue.completedLabelRGB,
             Key.textColorVersion: 0,
             Key.showSeconds: true,
             Key.showFloatingPanel: true,
             Key.showMenuBarRemaining: true,
-            Key.panelOpacity: 0.90,
-            Key.backgroundRGB: 0xE9ECF5,
-            Key.backgroundOpacity: 0.92,
-            Key.progressRGB: 0x5856D6,
-            Key.progressOpacity: 1.0,
-            Key.trackRGB: 0x6B7280,
-            Key.trackOpacity: 0.30,
-            Key.beaconRGB: 0x5856D6,
-            Key.beaconDiameter: 8.0,
-            Key.beaconSizeVersion: 0
+            Key.lockPanelPosition: false,
+            Key.panelOpacity: DefaultValue.panelOpacity,
+            Key.backgroundRGB: DefaultValue.backgroundRGB,
+            Key.accentRGB: DefaultValue.accentRGB
         ])
-        startMinutes = defaults.integer(forKey: Key.startMinutes)
-        endMinutes = defaults.integer(forKey: Key.endMinutes)
-        circleSize = defaults.double(forKey: Key.circleSize)
-        centerLabel = defaults.string(forKey: Key.centerLabel) ?? "牛马"
-        completedLabel = defaults.string(forKey: Key.completedLabel) ?? "下班"
-        centerLabelRGB = defaults.integer(forKey: Key.centerLabelRGB)
-        completedLabelRGB = defaults.integer(forKey: Key.completedLabelRGB)
+
+        // Migrate old installs before validating the complete settings payload.
+        if defaults.integer(forKey: Key.textColorVersion) < 1 {
+            if defaults.integer(forKey: Key.centerLabelRGB) == 0x000000 {
+                defaults.set(DefaultValue.centerLabelRGB, forKey: Key.centerLabelRGB)
+            }
+            if defaults.integer(forKey: Key.completedLabelRGB) == 0x000000 {
+                defaults.set(DefaultValue.completedLabelRGB, forKey: Key.completedLabelRGB)
+            }
+            defaults.set(1, forKey: Key.textColorVersion)
+        }
+
+        let normalizedStart = Self.validMinutes(defaults.integer(forKey: Key.startMinutes), fallback: DefaultValue.startMinutes)
+        let normalizedEnd = Self.validMinutes(defaults.integer(forKey: Key.endMinutes), fallback: DefaultValue.endMinutes)
+        let normalizedSize = Self.clampedFinite(defaults.double(forKey: Key.widgetSize), range: 40...88, fallback: DefaultValue.widgetSize)
+        let normalizedOpacity = Self.clampedFinite(defaults.double(forKey: Key.panelOpacity), range: 0.45...1, fallback: DefaultValue.panelOpacity)
+        let normalizedWaitingLabel = Self.limitedLabel(defaults.string(forKey: Key.waitingLabel), fallback: DefaultValue.waitingLabel)
+        let normalizedCenterLabel = Self.limitedLabel(defaults.string(forKey: Key.centerLabel), fallback: DefaultValue.centerLabel)
+        let normalizedCompletedLabel = Self.limitedLabel(defaults.string(forKey: Key.completedLabel), fallback: DefaultValue.completedLabel)
+        let normalizedWaitingRGB = Self.validRGB(defaults.integer(forKey: Key.waitingLabelRGB), fallback: DefaultValue.waitingLabelRGB)
+        let normalizedCenterRGB = Self.validRGB(defaults.integer(forKey: Key.centerLabelRGB), fallback: DefaultValue.centerLabelRGB)
+        let normalizedCompletedRGB = Self.validRGB(defaults.integer(forKey: Key.completedLabelRGB), fallback: DefaultValue.completedLabelRGB)
+        let normalizedBackgroundRGB = Self.validRGB(defaults.integer(forKey: Key.backgroundRGB), fallback: DefaultValue.backgroundRGB)
+        let normalizedAccentRGB = Self.validRGB(defaults.integer(forKey: Key.accentRGB), fallback: DefaultValue.accentRGB)
+
+        let normalizedValues: [(String, Any)] = [
+            (Key.startMinutes, normalizedStart),
+            (Key.endMinutes, normalizedEnd),
+            (Key.widgetSize, normalizedSize),
+            (Key.panelOpacity, normalizedOpacity),
+            (Key.waitingLabel, normalizedWaitingLabel),
+            (Key.centerLabel, normalizedCenterLabel),
+            (Key.completedLabel, normalizedCompletedLabel),
+            (Key.waitingLabelRGB, normalizedWaitingRGB),
+            (Key.centerLabelRGB, normalizedCenterRGB),
+            (Key.completedLabelRGB, normalizedCompletedRGB),
+            (Key.backgroundRGB, normalizedBackgroundRGB),
+            (Key.accentRGB, normalizedAccentRGB)
+        ]
+        normalizedValues.forEach { defaults.set($0.1, forKey: $0.0) }
+        if defaults.integer(forKey: Key.settingsSchemaVersion) < Self.currentSettingsSchemaVersion {
+            defaults.set(Self.currentSettingsSchemaVersion, forKey: Key.settingsSchemaVersion)
+        }
+
+        startMinutes = normalizedStart
+        endMinutes = normalizedEnd
+        widgetSize = normalizedSize
+        showCowEars = defaults.bool(forKey: Key.showCowEars)
+        waitingLabel = normalizedWaitingLabel
+        centerLabel = normalizedCenterLabel
+        completedLabel = normalizedCompletedLabel
+        waitingLabelRGB = normalizedWaitingRGB
+        centerLabelRGB = normalizedCenterRGB
+        completedLabelRGB = normalizedCompletedRGB
         showSeconds = defaults.bool(forKey: Key.showSeconds)
         showFloatingPanel = defaults.bool(forKey: Key.showFloatingPanel)
         showMenuBarRemaining = defaults.bool(forKey: Key.showMenuBarRemaining)
-        panelOpacity = defaults.double(forKey: Key.panelOpacity)
-        backgroundRGB = defaults.integer(forKey: Key.backgroundRGB)
-        backgroundOpacity = defaults.double(forKey: Key.backgroundOpacity)
-        progressRGB = defaults.integer(forKey: Key.progressRGB)
-        progressOpacity = defaults.double(forKey: Key.progressOpacity)
-        trackRGB = defaults.integer(forKey: Key.trackRGB)
-        trackOpacity = defaults.double(forKey: Key.trackOpacity)
-        beaconRGB = defaults.integer(forKey: Key.beaconRGB)
-        beaconDiameter = defaults.double(forKey: Key.beaconDiameter)
-        if defaults.integer(forKey: Key.textColorVersion) < 1 {
-            if centerLabelRGB == 0x000000 { centerLabelRGB = 0x4338CA }
-            if completedLabelRGB == 0x000000 { completedLabelRGB = 0x059669 }
-            defaults.set(1, forKey: Key.textColorVersion)
+        lockPanelPosition = defaults.bool(forKey: Key.lockPanelPosition)
+        panelOpacity = normalizedOpacity
+        backgroundRGB = normalizedBackgroundRGB
+        accentRGB = normalizedAccentRGB
+        let loginStatus = SMAppService.mainApp.status
+        launchAtLoginEnabled = loginStatus == .enabled || loginStatus == .requiresApproval
+        launchAtLoginNeedsApproval = loginStatus == .requiresApproval
+        launchAtLoginError = nil
+        restUntil = defaults.object(forKey: Key.restUntil) as? Date
+        if restUntil == nil,
+           let legacyRestDay = defaults.object(forKey: Key.restDay) as? Date,
+           Calendar.current.isDate(Date(), inSameDayAs: legacyRestDay) {
+            restUntil = Self.restDeadline(
+                now: legacyRestDay,
+                startMinutes: startMinutes,
+                endMinutes: endMinutes
+            )
         }
-        if defaults.integer(forKey: Key.beaconSizeVersion) < 1 {
-            if beaconDiameter == 6 { beaconDiameter = 8 }
-            defaults.set(1, forKey: Key.beaconSizeVersion)
-        }
-        startTimer()
+        defaults.removeObject(forKey: Key.restDay)
+        scheduleNextRefresh()
+    }
+
+    private static func validMinutes(_ value: Int, fallback: Int) -> Int {
+        (0..<(24 * 60)).contains(value) ? value : fallback
+    }
+
+    private static func clampedFinite(_ value: Double, range: ClosedRange<Double>, fallback: Double) -> Double {
+        guard value.isFinite else { return fallback }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private static func limitedLabel(_ value: String?, fallback: String) -> String {
+        String((value ?? fallback).prefix(6))
+    }
+
+    private static func validRGB(_ value: Int, fallback: Int) -> Int {
+        (0...0xFFFFFF).contains(value) ? value : fallback
     }
 
     func setBackgroundColor(_ color: SwiftUI.Color) {
@@ -180,35 +358,27 @@ final class ProgressModel: ObservableObject {
         centerLabelRGB = packedRGB(from: color)
     }
 
+    func setWaitingLabelColor(_ color: SwiftUI.Color) {
+        waitingLabelRGB = packedRGB(from: color)
+    }
+
     func setCompletedLabelColor(_ color: SwiftUI.Color) {
         completedLabelRGB = packedRGB(from: color)
     }
 
-    func setProgressColor(_ color: SwiftUI.Color) {
-        progressRGB = packedRGB(from: color)
-    }
-
-    func setTrackColor(_ color: SwiftUI.Color) {
-        trackRGB = packedRGB(from: color)
-    }
-
-    func setBeaconColor(_ color: SwiftUI.Color) {
-        beaconRGB = packedRGB(from: color)
+    func setAccentColor(_ color: SwiftUI.Color) {
+        accentRGB = packedRGB(from: color)
     }
 
     func resetAppearanceDefaults() {
-        circleSize = 56
+        widgetSize = 62
+        showCowEars = true
         panelOpacity = 0.90
         backgroundRGB = 0xE9ECF5
-        backgroundOpacity = 0.92
+        waitingLabelRGB = 0x4338CA
         centerLabelRGB = 0x4338CA
         completedLabelRGB = 0x059669
-        progressRGB = 0x5856D6
-        progressOpacity = 1.0
-        trackRGB = 0x6B7280
-        trackOpacity = 0.30
-        beaconRGB = 0x5856D6
-        beaconDiameter = 8.0
+        accentRGB = 0x5856D6
     }
 
     private func packedRGB(from color: SwiftUI.Color) -> Int {
@@ -227,7 +397,67 @@ final class ProgressModel: ObservableObject {
     }
 
     func refresh() {
-        now = Date()
+        refresh(at: Date())
+    }
+
+    /// Refreshing at an explicit instant keeps wake/clock recovery testable and
+    /// clears an expired rest marker instead of persisting stale state forever.
+    func refresh(at date: Date) {
+        now = date
+        if let restUntil, date >= restUntil {
+            self.restUntil = nil
+        }
+        scheduleNextRefresh()
+    }
+
+    /// A manual clock or time-zone change can move the intended local end of a
+    /// rest period. Re-anchor it without adding a polling timer.
+    func resynchronizeAfterSystemTimeChange(at date: Date = Date()) {
+        let restIsStillActive = restUntil.map { date < $0 } ?? false
+        now = date
+        if restIsStillActive {
+            restUntil = Self.restDeadline(
+                now: date,
+                startMinutes: startMinutes,
+                endMinutes: endMinutes
+            )
+        } else if restUntil != nil {
+            restUntil = nil
+        }
+        scheduleNextRefresh()
+    }
+
+    func setCoreHovered(_ hovered: Bool) {
+        guard isCoreHovered != hovered else { return }
+        isCoreHovered = hovered
+        refresh()
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        let status = SMAppService.mainApp.status
+        launchAtLoginEnabled = status == .enabled || status == .requiresApproval
+        launchAtLoginNeedsApproval = status == .requiresApproval
+    }
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        launchAtLoginError = nil
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                if service.status == .notRegistered || service.status == .notFound {
+                    try service.register()
+                }
+            } else if service.status != .notRegistered {
+                try service.unregister()
+            }
+        } catch {
+            launchAtLoginError = error.localizedDescription
+        }
+        refreshLaunchAtLoginStatus()
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 
     func format(_ interval: TimeInterval) -> String {
@@ -253,11 +483,55 @@ final class ProgressModel: ObservableObject {
         return String(format: "%02d:%02d", roundedMinutes / 60, roundedMinutes % 60)
     }
 
-    private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+    private func scheduleNextRefresh() {
+        timer?.invalidate()
+
+        let delay = nextRefreshDelay
+        let nextTimer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-        timer?.tolerance = 0.12
+        nextTimer.tolerance = delay <= 1.1 ? 0.08 : min(delay * 0.02, 0.20)
+        RunLoop.main.add(nextTimer, forMode: .common)
+        timer = nextTimer
+    }
+
+    private var nextRefreshDelay: TimeInterval {
+        let state = snapshot
+        let secondPrecision = (isCoreHovered && coreHoverHasTime)
+            || (showMenuBarRemaining && showSeconds)
+            || (showFloatingPanel && finalMinuteSeconds != nil)
+
+        if secondPrecision {
+            let fraction = now.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 1)
+            return max(1.015 - fraction, 0.05)
+        }
+
+        if isRestingToday, let restUntil {
+            return max(restUntil.timeIntervalSince(now), 0.05)
+        }
+
+        var delays = [
+            Schedule.nextTransition(
+                after: now,
+                startMinutes: startMinutes,
+                endMinutes: endMinutes
+            ).timeIntervalSince(now)
+        ]
+
+        if state.phase == .running {
+            if state.remaining > 5 * 60 { delays.append(state.remaining - 5 * 60) }
+            if showFloatingPanel, state.remaining > 60 { delays.append(state.remaining - 60) }
+        }
+
+        let needsMinuteUpdates = (showFloatingPanel && showCowEars)
+            || (showMenuBarRemaining && !showSeconds)
+        if needsMinuteUpdates, state.remaining > 0 {
+            let remainder = state.remaining.truncatingRemainder(dividingBy: 60)
+            delays.append(remainder > 0.05 ? remainder : 60)
+        }
+
+        return max(delays.filter { $0 > 0 }.min() ?? 3600, 0.05)
     }
 
     private func date(for minutes: Int) -> Date {
@@ -268,4 +542,5 @@ final class ProgressModel: ObservableObject {
         let values = Calendar.current.dateComponents([.hour, .minute], from: date)
         return (values.hour ?? 0) * 60 + (values.minute ?? 0)
     }
+
 }

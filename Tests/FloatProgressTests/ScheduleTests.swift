@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import FloatProgress
@@ -16,7 +17,6 @@ struct ScheduleTests {
     @Test func runningDaySchedule() {
         let result = Schedule.snapshot(now: date(13, 30), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
         #expect(result.phase == .running)
-        #expect(abs(result.progress - 0.5) < 0.001)
         #expect(result.remaining == 4.5 * 3600)
     }
 
@@ -29,36 +29,107 @@ struct ScheduleTests {
     @Test func overnightSchedule() {
         let result = Schedule.snapshot(now: date(2), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
         #expect(result.phase == .running)
-        #expect(abs(result.progress - 0.5) < 0.001)
         #expect(result.remaining == 4 * 3600)
+    }
+
+    @Test func schedulePhasesAreExactAtDaytimeBoundaries() {
+        let beforeStart = Schedule.snapshot(now: date(8, 59, 59), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
+        #expect(beforeStart.phase == .waiting)
+        #expect(beforeStart.remaining == 1)
+
+        let atStart = Schedule.snapshot(now: date(9), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
+        #expect(atStart.phase == .running)
+        #expect(atStart.remaining == 9 * 3600)
+
+        let finalSecond = Schedule.snapshot(now: date(17, 59, 59), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
+        #expect(finalSecond.phase == .running)
+        #expect(finalSecond.remaining == 1)
+
+        let atEnd = Schedule.snapshot(now: date(18), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
+        #expect(atEnd.phase == .finished)
+        #expect(atEnd.remaining == 0)
+    }
+
+    @Test func schedulePhasesAreExactAtOvernightBoundaries() {
+        let finalSecond = Schedule.snapshot(now: date(5, 59, 59), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+        #expect(finalSecond.phase == .running)
+        #expect(finalSecond.remaining == 1)
+
+        let atEnd = Schedule.snapshot(now: date(6), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+        #expect(atEnd.phase == .finished)
+        #expect(atEnd.remaining == 0)
+
+        let beforeStart = Schedule.snapshot(now: date(21, 59, 59), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+        #expect(beforeStart.phase == .finished)
+
+        let atStart = Schedule.snapshot(now: date(22), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+        #expect(atStart.phase == .running)
+        #expect(atStart.remaining == 8 * 3600)
+    }
+
+    @Test func nextScheduleTransitionHandlesDaytimeAndOvernightPlans() {
+        #expect(Schedule.nextTransition(after: date(8), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar) == date(9))
+        #expect(Schedule.nextTransition(after: date(12), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar) == date(18))
+        #expect(
+            Schedule.nextTransition(after: date(20), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
+                == calendar.date(byAdding: .day, value: 1, to: date(9))
+        )
+
+        #expect(Schedule.nextTransition(after: date(2), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar) == date(6))
+        #expect(Schedule.nextTransition(after: date(12), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar) == date(22))
+        #expect(
+            Schedule.nextTransition(after: date(23), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+                == calendar.date(byAdding: .day, value: 1, to: date(6))
+        )
     }
 
     @Test func oneHourScheduleUsesTheWholeInterval() {
         let result = Schedule.snapshot(now: date(9, 30), startMinutes: 9 * 60, endMinutes: 10 * 60, calendar: calendar)
         #expect(result.phase == .running)
-        #expect(abs(result.progress - 0.5) < 0.001)
         #expect(result.remaining == 30 * 60)
     }
 
     @Test func tenMinuteScheduleUsesTheWholeInterval() {
         let result = Schedule.snapshot(now: date(9, 5), startMinutes: 9 * 60, endMinutes: 9 * 60 + 10, calendar: calendar)
         #expect(result.phase == .running)
-        #expect(abs(result.progress - 0.5) < 0.001)
         #expect(result.remaining == 5 * 60)
     }
 
     @Test func thirtyMinuteScheduleRunsInsideItsClockRange() {
         let result = Schedule.snapshot(now: date(9, 15), startMinutes: 9 * 60, endMinutes: 9 * 60 + 30, calendar: calendar)
         #expect(result.phase == .running)
-        #expect(abs(result.progress - 0.5) < 0.001)
         #expect(result.remaining == 15 * 60)
     }
 
     @Test func oneMinuteScheduleKeepsSecondPrecision() {
         let result = Schedule.snapshot(now: date(9, 0, 30), startMinutes: 9 * 60, endMinutes: 9 * 60 + 1, calendar: calendar)
         #expect(result.phase == .running)
-        #expect(abs(result.progress - 0.5) < 0.001)
         #expect(result.remaining == 30)
+    }
+
+    @Test func previewDescriptionsFollowDaytimeSchedule() {
+        #expect(PreviewStateText.description(for: .resting, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "等待 · 00:00–09:00")
+        #expect(PreviewStateText.description(for: .focused, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "工作 · 09:00–18:15")
+        #expect(PreviewStateText.description(for: .expectant, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "临近 · 18:15–18:20（结束前 5 分钟）")
+        #expect(PreviewStateText.description(for: .relaxed, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "完成 · 18:20 后至次日 00:00")
+    }
+
+    @Test func previewDescriptionsMarkOvernightSchedule() {
+        #expect(PreviewStateText.description(for: .resting, startMinutes: 22 * 60, endMinutes: 6 * 60) == "等待 · 跨夜计划不单独出现，班次外显示完成")
+        #expect(PreviewStateText.description(for: .focused, startMinutes: 22 * 60, endMinutes: 6 * 60) == "工作 · 22:00–次日 05:55")
+        #expect(PreviewStateText.description(for: .expectant, startMinutes: 22 * 60, endMinutes: 6 * 60) == "临近 · 次日 05:55–次日 06:00（结束前 5 分钟）")
+        #expect(PreviewStateText.description(for: .relaxed, startMinutes: 22 * 60, endMinutes: 6 * 60) == "完成 · 06:00–22:00")
+    }
+
+    @Test func previewDescriptionsHandleShortSchedule() {
+        #expect(PreviewStateText.description(for: .focused, startMinutes: 9 * 60, endMinutes: 9 * 60 + 3) == "工作 · 当前时段不超过 5 分钟，全程进入临近状态")
+        #expect(PreviewStateText.description(for: .expectant, startMinutes: 9 * 60, endMinutes: 9 * 60 + 3) == "临近 · 09:00–09:03（结束前 3 分钟）")
+    }
+
+    @Test func scheduleHintsDistinguishDaytimeOvernightAndAllDayPlans() {
+        #expect(PreviewStateText.scheduleHint(startMinutes: 9 * 60, endMinutes: 18 * 60) == "每天按此时间段自动计算，无需手动启动。")
+        #expect(PreviewStateText.scheduleHint(startMinutes: 22 * 60, endMinutes: 6 * 60) == "结束时间早于开始时间，将按跨夜计划计算。")
+        #expect(PreviewStateText.scheduleHint(startMinutes: 9 * 60, endMinutes: 9 * 60) == "开始与结束相同，将按连续 24 小时的全天计划计算。")
     }
 
     @Test @MainActor func menuBarSecondsApplyToMultiHourDurations() {
@@ -126,47 +197,498 @@ struct ScheduleTests {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
+    @Test @MainActor func cowMoodChangesOnlyAtScheduleMilestones() {
+        let suiteName = "FloatProgressTests.cowMood"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let today = Calendar.current.startOfDay(for: Date())
+        let start = Calendar.current.date(byAdding: .minute, value: 9 * 60, to: today)!
+        let end = start.addingTimeInterval(10 * 60)
+        model.startMinutes = 9 * 60
+        model.endMinutes = 9 * 60 + 10
+
+        model.now = start.addingTimeInterval(-1)
+        #expect(model.cowMood == .resting)
+        model.now = start
+        #expect(model.cowMood == .focused)
+        model.now = end.addingTimeInterval(-301)
+        #expect(model.cowMood == .focused)
+        model.now = end.addingTimeInterval(-300)
+        #expect(model.cowMood == .expectant)
+        model.now = end.addingTimeInterval(-30)
+        #expect(model.cowMood == .expectant)
+        #expect(model.finalMinuteSeconds == 30)
+        model.now = end
+        #expect(model.cowMood == .relaxed)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     @Test @MainActor func resetAppearanceKeepsContentSettings() {
         let suiteName = "FloatProgressTests.resetAppearance"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
-        model.circleSize = 80
+        #expect(model.accentRGB == 0x5856D6)
+        model.widgetSize = 80
+        model.panelOpacity = 0.5
         model.backgroundRGB = 0x112233
         model.centerLabelRGB = 0x123456
+        model.waitingLabelRGB = 0x123456
         model.completedLabelRGB = 0x654321
-        model.progressOpacity = 0.25
-        model.trackOpacity = 0.80
-        model.beaconRGB = 0xABCDEF
-        model.beaconDiameter = 9
+        model.accentRGB = 0xABCDEF
+        model.showCowEars = false
         model.centerLabel = "搬砖"
+        model.waitingLabel = "准备"
 
         model.resetAppearanceDefaults()
 
-        #expect(model.circleSize == 56)
+        #expect(model.widgetSize == 62)
+        #expect(model.panelOpacity == 0.9)
+        #expect(model.showCowEars)
         #expect(model.backgroundRGB == 0xE9ECF5)
         #expect(model.centerLabelRGB == 0x4338CA)
+        #expect(model.waitingLabelRGB == 0x4338CA)
         #expect(model.completedLabelRGB == 0x059669)
-        #expect(model.progressOpacity == 1.0)
-        #expect(model.trackOpacity == 0.30)
-        #expect(model.beaconRGB == 0x5856D6)
-        #expect(model.beaconDiameter == 8.0)
+        #expect(model.accentRGB == 0x5856D6)
         #expect(model.centerLabel == "搬砖")
+        #expect(model.waitingLabel == "准备")
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    @Test @MainActor func largeBeaconExpandsWindowWithoutChangingOrbitSize() {
-        let suiteName = "FloatProgressTests.largeBeaconBounds"
+    @Test @MainActor func restTodayPausesDisplayAndExpiresTomorrow() {
+        let suiteName = "FloatProgressTests.restToday"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
-        model.circleSize = 40
-        model.beaconDiameter = 18
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        model.startMinutes = 9 * 60
+        model.endMinutes = 18 * 60
+        model.now = calendar.date(byAdding: .minute, value: 17 * 60 + 59, to: today)!
+        #expect(model.finalMinuteSeconds == 60)
 
-        #expect(abs(model.effectiveWidgetSize - 51.2) < 0.001)
+        model.toggleRestToday()
+        #expect(model.isRestingToday)
+        #expect(model.cowMood == .resting)
+        #expect(model.earTime == nil)
+        #expect(model.finalMinuteSeconds == nil)
+        #expect(model.compactStatusText == "休息")
+        #expect(model.statusText == "休息")
+        #expect(ProgressModel(defaults: defaults).isRestingToday)
 
-        model.beaconDiameter = 3
-        #expect(model.effectiveWidgetSize == 40)
+        model.now = calendar.date(byAdding: .day, value: 1, to: today)!
+        #expect(!model.isRestingToday)
+        #expect(model.cowMood == .resting)
+        #expect(model.earTime != nil)
+        #expect(model.compactStatusText != "休息")
+        #expect(model.startMinutes == 9 * 60)
+        #expect(model.endMinutes == 18 * 60)
         defaults.removePersistentDomain(forName: suiteName)
     }
+
+    @Test @MainActor func restTodayCanBeCancelledAndWaitingColorIsIndependent() {
+        let suiteName = "FloatProgressTests.waitingColor"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        #expect(model.waitingLabel == "待命")
+        #expect(model.waitingLabelRGB == 0x4338CA)
+        model.waitingLabel = "候场"
+        model.waitingLabelRGB = 0xAABBCC
+        #expect(model.centerLabelRGB == 0x4338CA)
+
+        model.toggleRestToday()
+        #expect(model.isRestingToday)
+        model.toggleRestToday()
+        #expect(!model.isRestingToday)
+        let restored = ProgressModel(defaults: defaults)
+        #expect(!restored.isRestingToday)
+        #expect(restored.waitingLabel == "候场")
+        #expect(restored.waitingLabelRGB == 0xAABBCC)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func overnightRestCoversTheWholeRelevantShift() {
+        let beforeEnd = ProgressModel.restDeadline(
+            now: date(2),
+            startMinutes: 22 * 60,
+            endMinutes: 6 * 60,
+            calendar: calendar
+        )
+        #expect(beforeEnd == date(6))
+
+        let betweenShifts = ProgressModel.restDeadline(
+            now: date(12),
+            startMinutes: 22 * 60,
+            endMinutes: 6 * 60,
+            calendar: calendar
+        )
+        #expect(betweenShifts == calendar.date(byAdding: .day, value: 1, to: date(6)))
+
+        let afterStart = ProgressModel.restDeadline(
+            now: date(23),
+            startMinutes: 22 * 60,
+            endMinutes: 6 * 60,
+            calendar: calendar
+        )
+        #expect(afterStart == calendar.date(byAdding: .day, value: 1, to: date(6)))
+    }
+
+    @Test @MainActor func daytimeRestExpiresAtNextMidnight() {
+        let deadline = ProgressModel.restDeadline(
+            now: date(13),
+            startMinutes: 9 * 60,
+            endMinutes: 18 * 60,
+            calendar: calendar
+        )
+        #expect(deadline == calendar.date(byAdding: .day, value: 1, to: date(0)))
+    }
+
+    @Test @MainActor func cowEarsStayInsidePanelAtEverySupportedSize() {
+        let suiteName = "FloatProgressTests.cowPanelBounds"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        for size in stride(from: 40.0, through: 88.0, by: 2.0) {
+            model.widgetSize = size
+            let side = CGFloat(size)
+            let earReach = side * (CowLayout.earCenterOffset + CowLayout.earWidth * (0.5 + CowLayout.earOverhang))
+            let outlineHalfWidth = max(side * 0.020, 1.1) / 2
+            #expect(model.effectivePanelSize.width / 2 >= earReach + outlineHalfWidth + 2)
+            #expect(model.effectivePanelSize.height == side)
+            model.showCowEars = false
+            #expect(model.effectivePanelSize.width == side)
+            model.showCowEars = true
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func cowEarsAndCoreHoverTime() {
+        let suiteName = "FloatProgressTests.cowHoverTime"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        #expect(model.widgetSize == 62)
+        #expect(model.showCowEars)
+        let today = Calendar.current.startOfDay(for: Date())
+        model.startMinutes = 9 * 60
+        model.endMinutes = 11 * 60
+        model.now = Calendar.current.date(byAdding: .second, value: 9 * 3600 + 30 * 60 + 45, to: today)!
+        #expect(model.coreHoverTime == "15")
+        #expect(model.earTime?.hours == "01")
+        #expect(model.earTime?.minutes == "30")
+
+        model.setCoreHovered(true)
+        model.now = Calendar.current.date(byAdding: .second, value: 9 * 3600 + 30 * 60 + 45, to: today)!
+        #expect(model.earTime?.hours == "01")
+        #expect(model.earTime?.minutes == "29")
+
+        model.showCowEars = false
+        #expect(model.coreHoverTime == "01:29")
+        model.now = Calendar.current.date(byAdding: .second, value: 10 * 3600 + 59 * 60 + 15, to: today)!
+        #expect(model.coreHoverTime == "00:45")
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func waitingEarsShowStartTimeAndHoverShowsPreciseCountdown() {
+        let suiteName = "FloatProgressTests.cowWaitingEars"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let today = Calendar.current.startOfDay(for: Date())
+        model.startMinutes = 9 * 60 + 5
+        model.endMinutes = 18 * 60
+        model.now = Calendar.current.date(byAdding: .minute, value: 8 * 60 + 35, to: today)!
+
+        #expect(model.earTime?.hours == "09")
+        #expect(model.earTime?.minutes == "05")
+        #expect(model.coreHoverTime == "00")
+        #expect(model.coreHoverHasTime)
+
+        model.setCoreHovered(true)
+        model.now = Calendar.current.date(byAdding: .minute, value: 8 * 60 + 35, to: today)!
+        #expect(model.earTime?.hours == "00")
+        #expect(model.earTime?.minutes == "30")
+
+        model.setCoreHovered(false)
+        model.now = Calendar.current.date(byAdding: .minute, value: 8 * 60 + 35, to: today)!
+        #expect(model.earTime?.hours == "09")
+        #expect(model.earTime?.minutes == "05")
+
+        model.now = Calendar.current.date(byAdding: .minute, value: 18 * 60, to: today)!
+        #expect(!model.coreHoverHasTime)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func panelPositionLockPersists() {
+        let suiteName = "FloatProgressTests.panelPositionLock"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        #expect(!model.lockPanelPosition)
+
+        model.lockPanelPosition = true
+
+        #expect(ProgressModel(defaults: defaults).lockPanelPosition)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test func opticalSizingAddsDetailOnlyAsSpaceAllows() {
+        let compact = CowOptics.values(for: 40)
+        let regular = CowOptics.values(for: 62)
+        let spacious = CowOptics.values(for: 88)
+
+        #expect(compact.headWidth > regular.headWidth)
+        #expect(regular.headWidth > spacious.headWidth)
+        #expect(compact.focusedEyeDiameter > regular.focusedEyeDiameter)
+        #expect(regular.focusedEyeDiameter > spacious.focusedEyeDiameter)
+        #expect(compact.outlineRatio > spacious.outlineRatio)
+        #expect(compact.nostrilDiameter > regular.nostrilDiameter)
+        #expect(regular.nostrilDiameter > spacious.nostrilDiameter)
+        #expect(compact.expressionStrokeRatio > regular.expressionStrokeRatio)
+        #expect(regular.expressionStrokeRatio > spacious.expressionStrokeRatio)
+        #expect(compact.earLabelRatio > spacious.earLabelRatio)
+        #expect(abs(CowOptics.values(for: 61.99).headWidth - CowOptics.values(for: 62.01).headWidth) < 0.001)
+        #expect(abs(CowOptics.values(for: 61.99).nostrilDiameter - CowOptics.values(for: 62.01).nostrilDiameter) < 0.001)
+    }
+
+    @Test @MainActor func statusBarCowIconIsOneCachedTemplateImage() {
+        let icon = StatusBarCowIcon.image
+        #expect(icon.isTemplate)
+        #expect(icon.size.width == 18)
+        #expect(icon.size.height == 18)
+        #expect(icon === StatusBarCowIcon.image)
+        #expect(StatusBarCowIcon.countdownFont === StatusBarCowIcon.countdownFont)
+
+        let attributes: [NSAttributedString.Key: Any] = [.font: StatusBarCowIcon.countdownFont]
+        let narrowDigits = NSAttributedString(string: " 11:11:11", attributes: attributes).size().width
+        let wideDigits = NSAttributedString(string: " 88:88:88", attributes: attributes).size().width
+        #expect(abs(narrowDigits - wideDigits) < 0.001)
+    }
+
+    @Test func appearanceContrastWarnsWithoutChangingColors() {
+        #expect(abs(AppearanceContrast.ratio(0x000000, 0xFFFFFF) - 21) < 0.001)
+        #expect(AppearanceContrast.ratio(0x5856D6, 0x5856D6) == 1)
+        #expect(
+            AppearanceContrast.warning(
+                backgroundRGB: 0xE9ECF5,
+                waitingRGB: 0x4338CA,
+                workingRGB: 0x4338CA,
+                completedRGB: 0x059669,
+                accentRGB: 0x5856D6
+            ) == nil
+        )
+        #expect(
+            AppearanceContrast.warning(
+                backgroundRGB: 0xFFFFFF,
+                waitingRGB: 0xFFFFFF,
+                workingRGB: 0x000000,
+                completedRGB: 0x000000,
+                accentRGB: 0x000000
+            ) == "待命文字与牛头底色对比偏低，可能看不清。"
+        )
+        #expect(
+            AppearanceContrast.warning(
+                backgroundRGB: 0xFFFFFF,
+                waitingRGB: 0x000000,
+                workingRGB: 0x000000,
+                completedRGB: 0x000000,
+                accentRGB: 0xFFFFFF
+            ) == "牛角与面部点缀和牛头底色过于接近，轮廓可能不明显。"
+        )
+    }
+
+    @Test @MainActor func cowEarsShowRemainingHoursAndMinutes() {
+        let suiteName = "FloatProgressTests.cowEars"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let today = Calendar.current.startOfDay(for: Date())
+        model.startMinutes = 9 * 60
+        model.endMinutes = 10 * 60 + 45
+        model.now = Calendar.current.date(byAdding: .minute, value: 9 * 60 + 30, to: today)!
+
+        #expect(model.earTime?.hours == "01")
+        #expect(model.earTime?.minutes == "15")
+
+        model.now = Calendar.current.date(byAdding: .second, value: -30, to: Calendar.current.date(byAdding: .minute, value: 10 * 60 + 45, to: today)!)!
+        #expect(model.finalMinuteSeconds == 30)
+        #expect(model.earTime == nil)
+
+        model.now = Calendar.current.date(byAdding: .second, value: -61, to: Calendar.current.date(byAdding: .minute, value: 10 * 60 + 45, to: today)!)!
+        #expect(model.finalMinuteSeconds == nil)
+        #expect(model.earTime?.hours == "00")
+        #expect(model.earTime?.minutes == "02")
+
+        model.now = Calendar.current.date(byAdding: .second, value: -60, to: Calendar.current.date(byAdding: .minute, value: 10 * 60 + 45, to: today)!)!
+        #expect(model.finalMinuteSeconds == 60)
+        #expect(model.earTime == nil)
+
+        model.now = Calendar.current.date(byAdding: .minute, value: 10 * 60 + 45, to: today)!
+        #expect(model.earTime == nil)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func finalMinuteOwnsTheDisplayAcrossHoverAndEarModes() {
+        let suiteName = "FloatProgressTests.finalMinuteDisplayOwnership"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let end = calendar.date(byAdding: .minute, value: 10 * 60, to: today)!
+        model.startMinutes = 9 * 60
+        model.endMinutes = 10 * 60
+
+        model.now = end.addingTimeInterval(-61)
+        #expect(model.finalMinuteSeconds == nil)
+        #expect(model.earTime?.hours == "00")
+        #expect(model.earTime?.minutes == "02")
+
+        model.setCoreHovered(true)
+        model.now = end.addingTimeInterval(-61)
+        #expect(model.earTime?.hours == "00")
+        #expect(model.earTime?.minutes == "01")
+        #expect(model.coreHoverTime == "01")
+
+        model.now = end.addingTimeInterval(-60)
+        #expect(model.finalMinuteSeconds == 60)
+        #expect(model.earTime == nil)
+        model.now = end.addingTimeInterval(-59)
+        #expect(model.finalMinuteSeconds == 59)
+        #expect(model.earTime == nil)
+        model.now = end.addingTimeInterval(-1)
+        #expect(model.finalMinuteSeconds == 1)
+        #expect(model.earTime == nil)
+
+        model.showCowEars = false
+        model.now = end.addingTimeInterval(-61)
+        #expect(model.coreHoverTime == "01:01")
+        #expect(model.finalMinuteSeconds == nil)
+        model.now = end.addingTimeInterval(-60)
+        #expect(model.finalMinuteSeconds == 60)
+
+        model.now = end
+        #expect(model.finalMinuteSeconds == nil)
+        #expect(model.snapshot.phase == .finished)
+        #expect(!model.coreHoverHasTime)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func overnightFinalMinuteUsesTheSameSixtyToOneBoundary() {
+        let suiteName = "FloatProgressTests.overnightFinalMinute"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let end = calendar.date(byAdding: .minute, value: 6 * 60, to: today)!
+        model.startMinutes = 22 * 60
+        model.endMinutes = 6 * 60
+
+        model.now = end.addingTimeInterval(-61)
+        #expect(model.snapshot.phase == .running)
+        #expect(model.finalMinuteSeconds == nil)
+        #expect(model.earTime?.minutes == "02")
+        model.now = end.addingTimeInterval(-60)
+        #expect(model.finalMinuteSeconds == 60)
+        #expect(model.earTime == nil)
+        model.now = end.addingTimeInterval(-59)
+        #expect(model.finalMinuteSeconds == 59)
+        model.now = end.addingTimeInterval(-1)
+        #expect(model.finalMinuteSeconds == 1)
+        model.now = end
+        #expect(model.snapshot.phase == .finished)
+        #expect(model.finalMinuteSeconds == nil)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func timeResynchronizationRealignsActiveRestAndClearsExpiredRest() {
+        let suiteName = "FloatProgressTests.timeResynchronization"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let afternoon = calendar.date(byAdding: .hour, value: 13, to: today)!
+        let oldDeadline = calendar.date(byAdding: .day, value: 2, to: today)!
+        defaults.set(9 * 60, forKey: "startMinutes")
+        defaults.set(18 * 60, forKey: "endMinutes")
+        defaults.set(oldDeadline, forKey: "restUntil")
+        let model = ProgressModel(defaults: defaults)
+
+        model.resynchronizeAfterSystemTimeChange(at: afternoon)
+        let expectedMidnight = calendar.date(byAdding: .day, value: 1, to: today)!
+        #expect(model.now == afternoon)
+        #expect(model.restUntil == expectedMidnight)
+        #expect(model.isRestingToday)
+
+        model.refresh(at: expectedMidnight)
+        #expect(model.restUntil == nil)
+        #expect(!model.isRestingToday)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func startupRepairsCorruptPreferencesAndRecordsSchemaVersion() {
+        let suiteName = "FloatProgressTests.preferenceRepair"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(-1, forKey: "startMinutes")
+        defaults.set(2_000, forKey: "endMinutes")
+        defaults.set(999.0, forKey: "circleSize")
+        defaults.set(Double.nan, forKey: "panelOpacity")
+        defaults.set("一二三四五六七八", forKey: "waitingLabel")
+        defaults.set("ABCDEFGHI", forKey: "centerLabel")
+        defaults.set(-1, forKey: "waitingLabelRGB")
+        defaults.set(0x1FFFFFF, forKey: "completedLabelRGB")
+        defaults.set(-99, forKey: "backgroundRGB")
+        defaults.set(0x1000000, forKey: "progressRGB")
+        defaults.set(1, forKey: "textColorVersion")
+
+        let model = ProgressModel(defaults: defaults)
+
+        #expect(model.startMinutes == 9 * 60)
+        #expect(model.endMinutes == 18 * 60)
+        #expect(model.widgetSize == 88)
+        #expect(model.panelOpacity == 0.9)
+        #expect(model.waitingLabel == "一二三四五六")
+        #expect(model.centerLabel == "ABCDEF")
+        #expect(model.waitingLabelRGB == 0x4338CA)
+        #expect(model.completedLabelRGB == 0x059669)
+        #expect(model.backgroundRGB == 0xE9ECF5)
+        #expect(model.accentRGB == 0x5856D6)
+        #expect(defaults.integer(forKey: "settingsSchemaVersion") == ProgressModel.currentSettingsSchemaVersion)
+        #expect(defaults.double(forKey: "circleSize") == 88)
+        #expect(defaults.string(forKey: "waitingLabel") == "一二三四五六")
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func startupPreservesValidCustomPreferences() {
+        let suiteName = "FloatProgressTests.preferencePreservation"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(0, forKey: "startMinutes")
+        defaults.set(23 * 60 + 59, forKey: "endMinutes")
+        defaults.set(41.5, forKey: "circleSize")
+        defaults.set(0.73, forKey: "panelOpacity")
+        defaults.set("", forKey: "centerLabel")
+        defaults.set(0x000000, forKey: "centerLabelRGB")
+        defaults.set(1, forKey: "textColorVersion")
+
+        let model = ProgressModel(defaults: defaults)
+
+        #expect(model.startMinutes == 0)
+        #expect(model.endMinutes == 23 * 60 + 59)
+        #expect(model.widgetSize == 41.5)
+        #expect(model.panelOpacity == 0.73)
+        #expect(model.centerLabel.isEmpty)
+        #expect(model.centerLabelRGB == 0x000000)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test func reduceTransparencyOverridesWithoutChangingSavedOpacity() {
+        #expect(AccessibilityAppearance.panelOpacity(userOpacity: 0.55, reduceTransparency: false) == 0.55)
+        #expect(AccessibilityAppearance.panelOpacity(userOpacity: 0.55, reduceTransparency: true) == 1)
+    }
+
 }
