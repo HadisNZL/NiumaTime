@@ -143,6 +143,13 @@ struct SettingsView: View {
             Section("时间段") {
                 DatePicker("开始", selection: Binding(get: { model.startDate }, set: { model.startDate = $0 }), displayedComponents: .hourAndMinute)
                 DatePicker("结束", selection: Binding(get: { model.endDate }, set: { model.endDate = $0 }), displayedComponents: .hourAndMinute)
+                Label(model.workdayStatusText, systemImage: model.isRestingToday ? "calendar.badge.minus" : "calendar.badge.checkmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(model.isRestingToday ? model.waitingLabelSwiftUIColor : model.accentSwiftUIColor)
+                Text(ChinaWorkdayCalendar.coverageText + "；官方节假日和普通周末自动休息，调休周末正常运行。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(scheduleHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -315,10 +322,11 @@ struct SettingsView: View {
     }
 
     private var scheduleHint: String {
-        PreviewStateText.scheduleHint(
+        let timeHint = PreviewStateText.scheduleHint(
             startMinutes: model.startMinutes,
             endMinutes: model.endMinutes
         )
+        return "只在中国工作日运行。" + timeHint
     }
 
     private var appearanceContrastWarning: String? {
@@ -342,7 +350,7 @@ struct SettingsView: View {
     private var currentScheduleState: String {
         let currentTime = model.now.formatted(date: .omitted, time: .shortened)
         if model.isRestingToday {
-            return "当前 " + currentTime + "：休息至 " + (model.restResumeText ?? "计划结束") + "，届时自动恢复"
+            return "当前 " + currentTime + "：" + model.restStatusText
         }
         switch model.snapshot.phase {
         case .waiting:

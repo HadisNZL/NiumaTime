@@ -14,6 +14,24 @@ struct ScheduleTests {
         calendar.date(from: DateComponents(year: 2026, month: 9, day: 20, hour: hour, minute: minute, second: second))!
     }
 
+    private func chinaDate(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> Date {
+        var chinaCalendar = Calendar(identifier: .gregorian)
+        chinaCalendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return chinaCalendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    private func currentCalendarDate(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> Date {
+        var currentCalendar = Calendar(identifier: .gregorian)
+        currentCalendar.timeZone = Calendar.current.timeZone
+        return currentCalendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    private var chinaCalendar: Calendar {
+        var chinaCalendar = Calendar(identifier: .gregorian)
+        chinaCalendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return chinaCalendar
+    }
+
     @Test func runningDaySchedule() {
         let result = Schedule.snapshot(now: date(13, 30), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
         #expect(result.phase == .running)
@@ -83,6 +101,59 @@ struct ScheduleTests {
         )
     }
 
+    @Test func chinaWorkdayCalendarRecognizesOfficialSchedulesFrom2024Through2026() {
+        let adjustedWorkdays = [
+            chinaDate(2024, 2, 4),
+            chinaDate(2024, 5, 11),
+            chinaDate(2025, 1, 26),
+            chinaDate(2025, 10, 11),
+            chinaDate(2026, 1, 4),
+            chinaDate(2026, 10, 10)
+        ]
+        for day in adjustedWorkdays {
+            #expect(ChinaWorkdayCalendar.kind(for: day, calendar: chinaCalendar) == .adjustedWorkday)
+        }
+
+        let holidays = [
+            chinaDate(2024, 2, 10),
+            chinaDate(2024, 10, 7),
+            chinaDate(2025, 1, 28),
+            chinaDate(2025, 10, 8),
+            chinaDate(2026, 2, 23),
+            chinaDate(2026, 9, 25)
+        ]
+        for day in holidays {
+            #expect(ChinaWorkdayCalendar.kind(for: day, calendar: chinaCalendar) == .publicHoliday)
+        }
+
+        #expect(ChinaWorkdayCalendar.kind(for: chinaDate(2026, 9, 23), calendar: chinaCalendar) == .regularWorkday)
+        #expect(ChinaWorkdayCalendar.kind(for: chinaDate(2026, 9, 19), calendar: chinaCalendar) == .weekend)
+        #expect(ChinaWorkdayCalendar.kind(for: chinaDate(2027, 1, 4), calendar: chinaCalendar) == .unsupportedWeekday(year: 2027))
+        #expect(ChinaWorkdayCalendar.kind(for: chinaDate(2027, 1, 3), calendar: chinaCalendar) == .unsupportedWeekend(year: 2027))
+    }
+
+    @Test func overnightScheduleUsesTheDateOnWhichTheShiftStarted() {
+        let earlyMonday = chinaDate(2026, 9, 21, 2)
+        let workDate = Schedule.workDate(
+            for: earlyMonday,
+            startMinutes: 22 * 60,
+            endMinutes: 6 * 60,
+            calendar: chinaCalendar
+        )
+        #expect(chinaCalendar.component(.day, from: workDate) == 20)
+        #expect(ChinaWorkdayCalendar.kind(for: workDate, calendar: chinaCalendar) == .adjustedWorkday)
+
+        let atShiftEnd = chinaDate(2026, 9, 21, 6)
+        let nextWorkDate = Schedule.workDate(
+            for: atShiftEnd,
+            startMinutes: 22 * 60,
+            endMinutes: 6 * 60,
+            calendar: chinaCalendar
+        )
+        #expect(chinaCalendar.component(.day, from: nextWorkDate) == 21)
+        #expect(ChinaWorkdayCalendar.kind(for: nextWorkDate, calendar: chinaCalendar) == .regularWorkday)
+    }
+
     @Test func oneHourScheduleUsesTheWholeInterval() {
         let result = Schedule.snapshot(now: date(9, 30), startMinutes: 9 * 60, endMinutes: 10 * 60, calendar: calendar)
         #expect(result.phase == .running)
@@ -137,7 +208,7 @@ struct ScheduleTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60
         model.endMinutes = 18 * 60
         model.now = Calendar.current.date(byAdding: .minute, value: 13 * 60 + 30, to: today)!
@@ -159,7 +230,7 @@ struct ScheduleTests {
 
         #expect(model.format(59) == "00小时01分")
 
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60
         model.endMinutes = 9 * 60 + 1
         model.now = Calendar.current.date(byAdding: .second, value: 30, to: Calendar.current.date(byAdding: .minute, value: 9 * 60, to: today)!)!
@@ -173,7 +244,7 @@ struct ScheduleTests {
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: currentCalendarDate(2026, 9, 23))
         let start = calendar.date(byAdding: .minute, value: 9 * 60, to: today)!
         let end = calendar.date(byAdding: .minute, value: 9 * 60 + 2, to: today)!
         model.startMinutes = 9 * 60
@@ -202,7 +273,7 @@ struct ScheduleTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         let start = Calendar.current.date(byAdding: .minute, value: 9 * 60, to: today)!
         let end = start.addingTimeInterval(10 * 60)
         model.startMinutes = 9 * 60
@@ -262,20 +333,22 @@ struct ScheduleTests {
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60
         model.endMinutes = 18 * 60
         model.now = calendar.date(byAdding: .minute, value: 17 * 60 + 59, to: today)!
         #expect(model.finalMinuteSeconds == 60)
 
-        model.toggleRestToday()
+        model.toggleRestToday(at: model.now)
         #expect(model.isRestingToday)
         #expect(model.cowMood == .resting)
         #expect(model.earTime == nil)
         #expect(model.finalMinuteSeconds == nil)
         #expect(model.compactStatusText == "休息")
         #expect(model.statusText == "休息")
-        #expect(ProgressModel(defaults: defaults).isRestingToday)
+        let restoredWhileResting = ProgressModel(defaults: defaults)
+        restoredWhileResting.now = model.now
+        #expect(restoredWhileResting.isRestingToday)
 
         model.now = calendar.date(byAdding: .day, value: 1, to: today)!
         #expect(!model.isRestingToday)
@@ -292,20 +365,81 @@ struct ScheduleTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
+        model.now = currentCalendarDate(2026, 9, 23)
         #expect(model.waitingLabel == "待命")
         #expect(model.waitingLabelRGB == 0x4338CA)
         model.waitingLabel = "候场"
         model.waitingLabelRGB = 0xAABBCC
         #expect(model.centerLabelRGB == 0x4338CA)
 
-        model.toggleRestToday()
+        model.toggleRestToday(at: model.now)
         #expect(model.isRestingToday)
-        model.toggleRestToday()
+        model.toggleRestToday(at: model.now)
         #expect(!model.isRestingToday)
         let restored = ProgressModel(defaults: defaults)
+        restored.now = model.now
         #expect(!restored.isRestingToday)
         #expect(restored.waitingLabel == "候场")
         #expect(restored.waitingLabelRGB == 0xAABBCC)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func smartWorkdaysRestOnHolidaysAndAllowATemporaryWorkOverride() {
+        let suiteName = "FloatProgressTests.smartWorkdays"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        model.startMinutes = 9 * 60
+        model.endMinutes = 18 * 60
+
+        model.now = currentCalendarDate(2026, 10, 2)
+        #expect(model.chinaWorkdayKind == .publicHoliday)
+        #expect(model.isAutomaticRestDay)
+        #expect(model.isRestingToday)
+        #expect(model.cowMood == .resting)
+        #expect(model.earTime == nil)
+        #expect(model.todayOverrideMenuTitle == "今天上班")
+
+        model.toggleRestToday(at: model.now)
+        #expect(!model.isRestingToday)
+        #expect(model.workUntil != nil)
+        #expect(model.todayOverrideMenuTitle == "恢复自动休息")
+
+        model.toggleRestToday(at: model.now)
+        #expect(model.workUntil == nil)
+        #expect(model.isRestingToday)
+
+        model.now = currentCalendarDate(2026, 9, 12)
+        #expect(model.chinaWorkdayKind == .weekend)
+        #expect(model.todayOverrideMenuTitle == "今天上班")
+        model.toggleRestToday(at: model.now)
+        #expect(!model.isRestingToday)
+        #expect(model.todayOverrideMenuTitle == "恢复自动休息")
+        model.toggleRestToday(at: model.now)
+
+        model.now = currentCalendarDate(2026, 10, 10)
+        #expect(model.chinaWorkdayKind == .adjustedWorkday)
+        #expect(!model.isAutomaticRestDay)
+        #expect(!model.isRestingToday)
+        #expect(model.todayOverrideMenuTitle == "今天休息")
+
+        model.toggleRestToday(at: model.now)
+        #expect(model.isRestingToday)
+        #expect(model.restUntil != nil)
+        #expect(model.todayOverrideMenuTitle == "恢复自动安排")
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func smartWorkdaysAreBuiltInAndRemoveTheLegacyPreference() {
+        let suiteName = "FloatProgressTests.smartWorkdaysPreference"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(false, forKey: "useChinaWorkdays")
+
+        let model = ProgressModel(defaults: defaults)
+        model.now = currentCalendarDate(2026, 10, 2)
+        #expect(model.isRestingToday)
+        #expect(defaults.object(forKey: "useChinaWorkdays") == nil)
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -371,7 +505,7 @@ struct ScheduleTests {
         let model = ProgressModel(defaults: defaults)
         #expect(model.widgetSize == 62)
         #expect(model.showCowEars)
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60
         model.endMinutes = 11 * 60
         model.now = Calendar.current.date(byAdding: .second, value: 9 * 3600 + 30 * 60 + 45, to: today)!
@@ -396,7 +530,7 @@ struct ScheduleTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60 + 5
         model.endMinutes = 18 * 60
         model.now = Calendar.current.date(byAdding: .minute, value: 8 * 60 + 35, to: today)!
@@ -504,7 +638,7 @@ struct ScheduleTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60
         model.endMinutes = 10 * 60 + 45
         model.now = Calendar.current.date(byAdding: .minute, value: 9 * 60 + 30, to: today)!
@@ -536,7 +670,7 @@ struct ScheduleTests {
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: currentCalendarDate(2026, 9, 23))
         let end = calendar.date(byAdding: .minute, value: 10 * 60, to: today)!
         model.startMinutes = 9 * 60
         model.endMinutes = 10 * 60
@@ -582,7 +716,7 @@ struct ScheduleTests {
         defaults.removePersistentDomain(forName: suiteName)
         let model = ProgressModel(defaults: defaults)
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: currentCalendarDate(2026, 9, 23))
         let end = calendar.date(byAdding: .minute, value: 6 * 60, to: today)!
         model.startMinutes = 22 * 60
         model.endMinutes = 6 * 60
@@ -609,7 +743,7 @@ struct ScheduleTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: currentCalendarDate(2026, 9, 23))
         let afternoon = calendar.date(byAdding: .hour, value: 13, to: today)!
         let oldDeadline = calendar.date(byAdding: .day, value: 2, to: today)!
         defaults.set(9 * 60, forKey: "startMinutes")

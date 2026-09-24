@@ -12,6 +12,23 @@ struct ScheduleSnapshot: Equatable {
 }
 
 enum Schedule {
+    /// The civil date that owns the current shift. For an overnight plan,
+    /// times before its end belong to the shift that started the previous day.
+    static func workDate(
+        for now: Date,
+        startMinutes: Int,
+        endMinutes: Int,
+        calendar: Calendar = .current
+    ) -> Date {
+        let dayStart = calendar.startOfDay(for: now)
+        guard endMinutes <= startMinutes else { return dayStart }
+
+        let components = calendar.dateComponents([.hour, .minute], from: now)
+        let currentMinutes = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+        guard currentMinutes < endMinutes else { return dayStart }
+        return calendar.date(byAdding: .day, value: -1, to: dayStart) ?? dayStart
+    }
+
     static func snapshot(
         now: Date,
         startMinutes: Int,

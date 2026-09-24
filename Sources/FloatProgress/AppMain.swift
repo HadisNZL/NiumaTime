@@ -146,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 DispatchQueue.main.async { self?.updateStatusItem() }
             }
             .store(in: &cancellables)
+        model.$workUntil
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.updateStatusItem() }
+            }
+            .store(in: &cancellables)
         model.$showFloatingPanel
             .sink { [weak self] visible in
                 guard let self, self.panel != nil else { return }
@@ -180,9 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let button = statusItem.button else { return }
         button.title = model.showMenuBarRemaining ? " \(model.compactStatusText)" : ""
         button.toolTip = model.isRestingToday
-            ? "牛马 · 休息至 \(model.restResumeText ?? "计划恢复")"
+            ? "牛马 · \(model.restStatusText)"
             : "牛马 · \(formattedTime(model.startMinutes))–\(formattedTime(model.endMinutes)) · \(model.statusText)"
-        restMenuItem.title = model.isRestingToday ? "恢复倒计时" : "今天休息"
+        restMenuItem.title = model.todayOverrideMenuTitle
     }
 
     private func resizePanel(to size: NSSize, preserveCenter: Bool) {

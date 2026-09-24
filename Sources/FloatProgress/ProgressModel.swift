@@ -35,11 +35,12 @@ final class ProgressModel: ObservableObject {
         static let backgroundRGB = "backgroundRGB"
         static let accentRGB = "progressRGB"
         static let restUntil = "restUntil"
+        static let workUntil = "workUntil"
         // Legacy key from the first one-day-rest implementation.
         static let restDay = "restDay"
     }
 
-    static let currentSettingsSchemaVersion = 2
+    static let currentSettingsSchemaVersion = 4
 
     private enum DefaultValue {
         static let startMinutes = 9 * 60
@@ -93,20 +94,77 @@ final class ProgressModel: ObservableObject {
             }
         }
     }
+    @Published private(set) var workUntil: Date? {
+        didSet {
+            if let workUntil {
+                defaults.set(workUntil, forKey: Key.workUntil)
+            } else {
+                defaults.removeObject(forKey: Key.workUntil)
+            }
+        }
+    }
     @Published private(set) var launchAtLoginEnabled: Bool
     @Published private(set) var launchAtLoginNeedsApproval: Bool
     @Published private(set) var launchAtLoginError: String?
 
-    var isRestingToday: Bool {
-        guard let restUntil else { return false }
-        return now < restUntil
+    private var isManualRestActive: Bool {
+        restUntil.map { now < $0 } ?? false
     }
 
-    func toggleRestToday() {
-        restUntil = isRestingToday
-            ? nil
-            : Self.restDeadline(now: now, startMinutes: startMinutes, endMinutes: endMinutes)
-        refresh()
+    private var isManualWorkActive: Bool {
+        workUntil.map { now < $0 } ?? false
+    }
+
+    var scheduleWorkDate: Date {
+        Schedule.workDate(for: now, startMinutes: startMinutes, endMinutes: endMinutes)
+    }
+
+    var chinaWorkdayKind: ChinaWorkdayKind {
+        ChinaWorkdayCalendar.kind(for: scheduleWorkDate)
+    }
+
+    var isAutomaticRestDay: Bool {
+        !chinaWorkdayKind.isWorkday
+    }
+
+    var isRestingToday: Bool {
+        if isManualWorkActive { return false }
+        if isManualRestActive { return true }
+        return isAutomaticRestDay
+    }
+
+    func toggleRestToday(at date: Date = Date()) {
+        now = date
+        if isManualRestActive || isManualWorkActive {
+            restUntil = nil
+            workUntil = nil
+        } else if isAutomaticRestDay {
+            restUntil = nil
+            workUntil = Self.restDeadline(now: now, startMinutes: startMinutes, endMinutes: endMinutes)
+        } else {
+            workUntil = nil
+            restUntil = Self.restDeadline(now: now, startMinutes: startMinutes, endMinutes: endMinutes)
+        }
+        refresh(at: date)
+    }
+
+    var todayOverrideMenuTitle: String {
+        if isManualRestActive { return "恢复自动安排" }
+        if isManualWorkActive { return "恢复自动休息" }
+        return isAutomaticRestDay ? "今天上班" : "今天休息"
+    }
+
+    var workdayStatusText: String {
+        if isManualWorkActive { return chinaWorkdayKind.title + " · 已手动设为上班" }
+        if isManualRestActive { return chinaWorkdayKind.title + " · 已手动设为休息" }
+        return chinaWorkdayKind.title
+    }
+
+    var restStatusText: String {
+        if isManualRestActive {
+            return "手动休息至 " + (restResumeText ?? "计划恢复")
+        }
+        return chinaWorkdayKind.title
     }
 
     var restResumeText: String? {
@@ -256,6 +314,7 @@ final class ProgressModel: ObservableObject {
         ])
 
         // Migrate old installs before validating the complete settings payload.
+        defaults.removeObject(forKey: "useChinaWorkdays")
         if defaults.integer(forKey: Key.textColorVersion) < 1 {
             if defaults.integer(forKey: Key.centerLabelRGB) == 0x000000 {
                 defaults.set(DefaultValue.centerLabelRGB, forKey: Key.centerLabelRGB)
@@ -320,6 +379,7 @@ final class ProgressModel: ObservableObject {
         launchAtLoginNeedsApproval = loginStatus == .requiresApproval
         launchAtLoginError = nil
         restUntil = defaults.object(forKey: Key.restUntil) as? Date
+        workUntil = defaults.object(forKey: Key.workUntil) as? Date
         if restUntil == nil,
            let legacyRestDay = defaults.object(forKey: Key.restDay) as? Date,
            Calendar.current.isDate(Date(), inSameDayAs: legacyRestDay) {
@@ -407,6 +467,9 @@ final class ProgressModel: ObservableObject {
         if let restUntil, date >= restUntil {
             self.restUntil = nil
         }
+        if let workUntil, date >= workUntil {
+            self.workUntil = nil
+        }
         scheduleNextRefresh()
     }
 
@@ -414,6 +477,7 @@ final class ProgressModel: ObservableObject {
     /// rest period. Re-anchor it without adding a polling timer.
     func resynchronizeAfterSystemTimeChange(at date: Date = Date()) {
         let restIsStillActive = restUntil.map { date < $0 } ?? false
+        let workIsStillActive = workUntil.map { date < $0 } ?? false
         now = date
         if restIsStillActive {
             restUntil = Self.restDeadline(
@@ -423,6 +487,15 @@ final class ProgressModel: ObservableObject {
             )
         } else if restUntil != nil {
             restUntil = nil
+        }
+        if workIsStillActive {
+            workUntil = Self.restDeadline(
+                now: date,
+                startMinutes: startMinutes,
+                endMinutes: endMinutes
+            )
+        } else if workUntil != nil {
+            workUntil = nil
         }
         scheduleNextRefresh()
     }
@@ -497,6 +570,26 @@ final class ProgressModel: ObservableObject {
 
     private var nextRefreshDelay: TimeInterval {
         let state = snapshot
+        let planTransition = Schedule.nextTransition(
+            after: now,
+            startMinutes: startMinutes,
+            endMinutes: endMinutes
+        )
+
+        if isRestingToday {
+            let nextMidnight = Calendar.current.date(
+                byAdding: .day,
+                value: 1,
+                to: Calendar.current.startOfDay(for: now)
+            ) ?? now.addingTimeInterval(86_400)
+            var restDelays = [
+                planTransition.timeIntervalSince(now),
+                nextMidnight.timeIntervalSince(now)
+            ]
+            if let restUntil { restDelays.append(restUntil.timeIntervalSince(now)) }
+            return max(restDelays.filter { $0 > 0 }.min() ?? 3600, 0.05)
+        }
+
         let secondPrecision = (isCoreHovered && coreHoverHasTime)
             || (showMenuBarRemaining && showSeconds)
             || (showFloatingPanel && finalMinuteSeconds != nil)
@@ -507,17 +600,12 @@ final class ProgressModel: ObservableObject {
             return max(1.015 - fraction, 0.05)
         }
 
-        if isRestingToday, let restUntil {
-            return max(restUntil.timeIntervalSince(now), 0.05)
-        }
-
         var delays = [
-            Schedule.nextTransition(
-                after: now,
-                startMinutes: startMinutes,
-                endMinutes: endMinutes
-            ).timeIntervalSince(now)
+            planTransition.timeIntervalSince(now)
         ]
+        if let workUntil, workUntil > now {
+            delays.append(workUntil.timeIntervalSince(now))
+        }
 
         if state.phase == .running {
             if state.remaining > 5 * 60 { delays.append(state.remaining - 5 * 60) }
