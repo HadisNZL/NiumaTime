@@ -11,10 +11,17 @@ enum CowMood: Hashable {
     case relaxed
 }
 
+enum SettingsTab: Hashable {
+    case calendar
+    case countdown
+    case about
+}
+
 @MainActor
 final class ProgressModel: ObservableObject {
     private enum Key {
         static let settingsSchemaVersion = "settingsSchemaVersion"
+        static let countdownEnabled = "countdownEnabled"
         static let startMinutes = "startMinutes"
         static let endMinutes = "endMinutes"
         // Keep the existing preference keys so updates preserve each user's appearance.
@@ -30,6 +37,11 @@ final class ProgressModel: ObservableObject {
         static let showSeconds = "showSeconds"
         static let showFloatingPanel = "showFloatingPanel"
         static let showMenuBarRemaining = "showMenuBarRemaining"
+        static let calendarFirstWeekday = "calendarFirstWeekday"
+        static let showLunarDetails = "showLunarDetails"
+        static let showWorkdayBadges = "showWorkdayBadges"
+        static let showMonthSummary = "showMonthSummary"
+        static let calendarAccentRGB = "calendarAccentRGB"
         static let lockPanelPosition = "lockPanelPosition"
         static let panelOpacity = "panelOpacity"
         static let backgroundRGB = "backgroundRGB"
@@ -40,7 +52,7 @@ final class ProgressModel: ObservableObject {
         static let restDay = "restDay"
     }
 
-    static let currentSettingsSchemaVersion = 4
+    static let currentSettingsSchemaVersion = 7
 
     private enum DefaultValue {
         static let startMinutes = 9 * 60
@@ -55,13 +67,23 @@ final class ProgressModel: ObservableObject {
         static let completedLabelRGB = 0x059669
         static let backgroundRGB = 0xE9ECF5
         static let accentRGB = 0x5856D6
+        static let calendarAccentRGB = 0x5856D6
     }
 
     private let defaults: UserDefaults
     private var timer: Timer?
     private var isCoreHovered = false
+    private var isCalendarPresented = false
+    private var isSettingsPresented = false
 
     @Published var now = Date()
+    @Published var countdownEnabled: Bool {
+        didSet {
+            defaults.set(countdownEnabled, forKey: Key.countdownEnabled)
+            if !countdownEnabled { isCoreHovered = false }
+            scheduleNextRefresh()
+        }
+    }
     @Published var startMinutes: Int { didSet { defaults.set(startMinutes, forKey: Key.startMinutes); refresh() } }
     @Published var endMinutes: Int { didSet { defaults.set(endMinutes, forKey: Key.endMinutes); refresh() } }
     @Published var widgetSize: Double { didSet { defaults.set(widgetSize, forKey: Key.widgetSize) } }
@@ -81,6 +103,12 @@ final class ProgressModel: ObservableObject {
         }
     }
     @Published var showMenuBarRemaining: Bool { didSet { defaults.set(showMenuBarRemaining, forKey: Key.showMenuBarRemaining); scheduleNextRefresh() } }
+    @Published var calendarFirstWeekday: Int { didSet { defaults.set(calendarFirstWeekday, forKey: Key.calendarFirstWeekday) } }
+    @Published var showLunarDetails: Bool { didSet { defaults.set(showLunarDetails, forKey: Key.showLunarDetails) } }
+    @Published var showWorkdayBadges: Bool { didSet { defaults.set(showWorkdayBadges, forKey: Key.showWorkdayBadges) } }
+    @Published var showMonthSummary: Bool { didSet { defaults.set(showMonthSummary, forKey: Key.showMonthSummary) } }
+    @Published var calendarAccentRGB: Int { didSet { defaults.set(calendarAccentRGB, forKey: Key.calendarAccentRGB) } }
+    @Published var settingsTab: SettingsTab = .calendar
     @Published var lockPanelPosition: Bool { didSet { defaults.set(lockPanelPosition, forKey: Key.lockPanelPosition) } }
     @Published var panelOpacity: Double { didSet { defaults.set(panelOpacity, forKey: Key.panelOpacity) } }
     @Published var backgroundRGB: Int { didSet { defaults.set(backgroundRGB, forKey: Key.backgroundRGB) } }
@@ -194,6 +222,14 @@ final class ProgressModel: ObservableObject {
         Schedule.snapshot(now: now, startMinutes: startMinutes, endMinutes: endMinutes)
     }
 
+    var isFloatingPanelActive: Bool {
+        countdownEnabled && showFloatingPanel
+    }
+
+    var isMenuBarCountdownActive: Bool {
+        countdownEnabled && showMenuBarRemaining
+    }
+
     var cowMood: CowMood {
         if isRestingToday { return .resting }
         let state = snapshot
@@ -212,7 +248,7 @@ final class ProgressModel: ObservableObject {
         guard state.phase == .running,
               state.remaining > 0,
               state.remaining <= 60 else { return nil }
-        return min(60, max(Int(ceil(state.remaining)), 1))
+        return min(60, max(countdownSeconds(state.remaining), 1))
     }
 
     var startDate: Date {
@@ -230,13 +266,14 @@ final class ProgressModel: ObservableObject {
     var waitingLabelSwiftUIColor: SwiftUI.Color { color(from: waitingLabelRGB) }
     var completedLabelSwiftUIColor: SwiftUI.Color { color(from: completedLabelRGB) }
     var accentSwiftUIColor: SwiftUI.Color { color(from: accentRGB) }
+    var calendarAccentSwiftUIColor: SwiftUI.Color { color(from: calendarAccentRGB) }
 
     var effectivePanelSize: NSSize {
         CowLayout.panelSize(for: CGFloat(widgetSize), showsEars: showCowEars)
     }
 
     var coreHoverTime: String {
-        let total = max(Int(snapshot.remaining.rounded(.down)), 0)
+        let total = countdownSeconds(snapshot.remaining)
         if showCowEars { return String(format: "%02d", total % 60) }
         let hours = total / 3600
         let minutes = (total % 3600) / 60
@@ -263,7 +300,7 @@ final class ProgressModel: ObservableObject {
             )
         }
         let remainingMinutes = isCoreHovered
-            ? max(Int(state.remaining.rounded(.down)) / 60, 0)
+            ? countdownSeconds(state.remaining) / 60
             : max(Int(ceil(state.remaining / 60)), 0)
         return (
             String(format: "%02d", remainingMinutes / 60),
@@ -272,19 +309,67 @@ final class ProgressModel: ObservableObject {
     }
 
     var statusText: String {
-        if isRestingToday { return "休息" }
-        return switch snapshot.phase {
-        case .waiting: "距开始 \(format(snapshot.remaining))"
-        case .running: "剩余 \(format(snapshot.remaining))"
+        statusText(at: now, showSeconds: showSeconds)
+    }
+
+    func statusText(at date: Date, showSeconds: Bool) -> String {
+        if isResting(at: date) { return "休息" }
+        let state = Schedule.snapshot(now: date, startMinutes: startMinutes, endMinutes: endMinutes)
+        return switch state.phase {
+        case .waiting: "距开始 \(format(state.remaining, showSeconds: showSeconds))"
+        case .running: "剩余 \(format(state.remaining, showSeconds: showSeconds))"
         case .finished: "完成"
         }
     }
 
+    var calendarStatusText: String {
+        statusText(at: now, showSeconds: false)
+    }
+
+    private func isResting(at date: Date) -> Bool {
+        if workUntil.map({ date < $0 }) ?? false { return false }
+        if restUntil.map({ date < $0 }) ?? false { return true }
+        let workDate = Schedule.workDate(
+            for: date,
+            startMinutes: startMinutes,
+            endMinutes: endMinutes
+        )
+        return !ChinaWorkdayCalendar.kind(for: workDate).isWorkday
+    }
+
+    private func format(_ interval: TimeInterval, showSeconds: Bool) -> String {
+        let total = countdownSeconds(interval)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        if showSeconds {
+            return String(format: "%02d:%02d:%02d", hours, minutes, total % 60)
+        }
+        let roundedMinutes = max(Int(ceil(interval / 60)), 0)
+        return String(format: "%02d小时%02d分", roundedMinutes / 60, roundedMinutes % 60)
+    }
+
+    func setCalendarPresented(_ presented: Bool) {
+        guard isCalendarPresented != presented else { return }
+        isCalendarPresented = presented
+        scheduleNextRefresh()
+    }
+
+    func setSettingsPresented(_ presented: Bool) {
+        guard isSettingsPresented != presented else { return }
+        isSettingsPresented = presented
+        scheduleNextRefresh()
+    }
+
     var compactStatusText: String {
-        if isRestingToday { return "休息" }
-        return switch snapshot.phase {
-        case .waiting: "\(formatCompact(snapshot.remaining)) 后开始"
-        case .running: formatCompact(snapshot.remaining)
+        compactStatusText(at: now, showSeconds: showSeconds)
+    }
+
+    func compactStatusText(at date: Date, showSeconds: Bool) -> String {
+        if isResting(at: date) { return "休息" }
+        let state = Schedule.snapshot(now: date, startMinutes: startMinutes, endMinutes: endMinutes)
+        return switch state.phase {
+        case .waiting: "\(formatCompact(state.remaining, showSeconds: showSeconds)) 后开始"
+        case .running: formatCompact(state.remaining, showSeconds: showSeconds)
         case .finished: "完成"
         }
     }
@@ -293,6 +378,7 @@ final class ProgressModel: ObservableObject {
         self.defaults = defaults
         defaults.register(defaults: [
             Key.settingsSchemaVersion: 0,
+            Key.countdownEnabled: true,
             Key.startMinutes: DefaultValue.startMinutes,
             Key.endMinutes: DefaultValue.endMinutes,
             Key.widgetSize: DefaultValue.widgetSize,
@@ -307,6 +393,11 @@ final class ProgressModel: ObservableObject {
             Key.showSeconds: true,
             Key.showFloatingPanel: true,
             Key.showMenuBarRemaining: true,
+            Key.calendarFirstWeekday: 2,
+            Key.showLunarDetails: true,
+            Key.showWorkdayBadges: true,
+            Key.showMonthSummary: true,
+            Key.calendarAccentRGB: DefaultValue.calendarAccentRGB,
             Key.lockPanelPosition: false,
             Key.panelOpacity: DefaultValue.panelOpacity,
             Key.backgroundRGB: DefaultValue.backgroundRGB,
@@ -337,6 +428,11 @@ final class ProgressModel: ObservableObject {
         let normalizedCompletedRGB = Self.validRGB(defaults.integer(forKey: Key.completedLabelRGB), fallback: DefaultValue.completedLabelRGB)
         let normalizedBackgroundRGB = Self.validRGB(defaults.integer(forKey: Key.backgroundRGB), fallback: DefaultValue.backgroundRGB)
         let normalizedAccentRGB = Self.validRGB(defaults.integer(forKey: Key.accentRGB), fallback: DefaultValue.accentRGB)
+        let normalizedCalendarAccentRGB = Self.validRGB(
+            defaults.integer(forKey: Key.calendarAccentRGB),
+            fallback: DefaultValue.calendarAccentRGB
+        )
+        let normalizedFirstWeekday = defaults.integer(forKey: Key.calendarFirstWeekday) == 1 ? 1 : 2
 
         let normalizedValues: [(String, Any)] = [
             (Key.startMinutes, normalizedStart),
@@ -350,13 +446,16 @@ final class ProgressModel: ObservableObject {
             (Key.centerLabelRGB, normalizedCenterRGB),
             (Key.completedLabelRGB, normalizedCompletedRGB),
             (Key.backgroundRGB, normalizedBackgroundRGB),
-            (Key.accentRGB, normalizedAccentRGB)
+            (Key.accentRGB, normalizedAccentRGB),
+            (Key.calendarAccentRGB, normalizedCalendarAccentRGB),
+            (Key.calendarFirstWeekday, normalizedFirstWeekday)
         ]
         normalizedValues.forEach { defaults.set($0.1, forKey: $0.0) }
         if defaults.integer(forKey: Key.settingsSchemaVersion) < Self.currentSettingsSchemaVersion {
             defaults.set(Self.currentSettingsSchemaVersion, forKey: Key.settingsSchemaVersion)
         }
 
+        countdownEnabled = defaults.bool(forKey: Key.countdownEnabled)
         startMinutes = normalizedStart
         endMinutes = normalizedEnd
         widgetSize = normalizedSize
@@ -370,6 +469,11 @@ final class ProgressModel: ObservableObject {
         showSeconds = defaults.bool(forKey: Key.showSeconds)
         showFloatingPanel = defaults.bool(forKey: Key.showFloatingPanel)
         showMenuBarRemaining = defaults.bool(forKey: Key.showMenuBarRemaining)
+        calendarFirstWeekday = normalizedFirstWeekday
+        showLunarDetails = defaults.bool(forKey: Key.showLunarDetails)
+        showWorkdayBadges = defaults.bool(forKey: Key.showWorkdayBadges)
+        showMonthSummary = defaults.bool(forKey: Key.showMonthSummary)
+        calendarAccentRGB = normalizedCalendarAccentRGB
         lockPanelPosition = defaults.bool(forKey: Key.lockPanelPosition)
         panelOpacity = normalizedOpacity
         backgroundRGB = normalizedBackgroundRGB
@@ -430,15 +534,32 @@ final class ProgressModel: ObservableObject {
         accentRGB = packedRGB(from: color)
     }
 
+    func setCalendarAccentColor(_ color: SwiftUI.Color) {
+        calendarAccentRGB = packedRGB(from: color)
+    }
+
     func resetAppearanceDefaults() {
-        widgetSize = 62
-        showCowEars = true
-        panelOpacity = 0.90
-        backgroundRGB = 0xE9ECF5
-        waitingLabelRGB = 0x4338CA
-        centerLabelRGB = 0x4338CA
-        completedLabelRGB = 0x059669
-        accentRGB = 0x5856D6
+        widgetSize = DefaultValue.widgetSize
+        panelOpacity = DefaultValue.panelOpacity
+        backgroundRGB = DefaultValue.backgroundRGB
+        accentRGB = DefaultValue.accentRGB
+    }
+
+    func resetTextDefaults() {
+        waitingLabel = DefaultValue.waitingLabel
+        centerLabel = DefaultValue.centerLabel
+        completedLabel = DefaultValue.completedLabel
+        waitingLabelRGB = DefaultValue.waitingLabelRGB
+        centerLabelRGB = DefaultValue.centerLabelRGB
+        completedLabelRGB = DefaultValue.completedLabelRGB
+    }
+
+    func resetCalendarDisplayDefaults() {
+        calendarFirstWeekday = 2
+        showLunarDetails = true
+        showWorkdayBadges = true
+        showMonthSummary = true
+        calendarAccentRGB = DefaultValue.calendarAccentRGB
     }
 
     private func packedRGB(from color: SwiftUI.Color) -> Int {
@@ -533,20 +654,8 @@ final class ProgressModel: ObservableObject {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    func format(_ interval: TimeInterval) -> String {
-        let total = max(Int(interval.rounded(.down)), 0)
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        let seconds = total % 60
-        if showSeconds {
-            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
-        }
-        let roundedMinutes = max(Int(ceil(interval / 60)), 0)
-        return String(format: "%02d小时%02d分", roundedMinutes / 60, roundedMinutes % 60)
-    }
-
-    private func formatCompact(_ interval: TimeInterval) -> String {
-        let total = max(Int(interval.rounded(.down)), 0)
+    private func formatCompact(_ interval: TimeInterval, showSeconds: Bool) -> String {
+        let total = countdownSeconds(interval)
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         if showSeconds {
@@ -558,6 +667,12 @@ final class ProgressModel: ObservableObject {
 
     private func scheduleNextRefresh() {
         timer?.invalidate()
+        timer = nil
+
+        guard countdownEnabled,
+              isFloatingPanelActive || isMenuBarCountdownActive || isCalendarPresented || isSettingsPresented else {
+            return
+        }
 
         let delay = nextRefreshDelay
         let nextTimer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
@@ -591,8 +706,8 @@ final class ProgressModel: ObservableObject {
         }
 
         let secondPrecision = (isCoreHovered && coreHoverHasTime)
-            || (showMenuBarRemaining && showSeconds)
             || (showFloatingPanel && finalMinuteSeconds != nil)
+            || (isMenuBarCountdownActive && showSeconds)
 
         if secondPrecision {
             let fraction = now.timeIntervalSinceReferenceDate
@@ -613,7 +728,8 @@ final class ProgressModel: ObservableObject {
         }
 
         let needsMinuteUpdates = (showFloatingPanel && showCowEars)
-            || (showMenuBarRemaining && !showSeconds)
+            || isMenuBarCountdownActive
+            || isCalendarPresented
         if needsMinuteUpdates, state.remaining > 0 {
             let remainder = state.remaining.truncatingRemainder(dividingBy: 60)
             delays.append(remainder > 0.05 ? remainder : 60)
@@ -629,6 +745,13 @@ final class ProgressModel: ObservableObject {
     private func minutes(for date: Date) -> Int {
         let values = Calendar.current.dateComponents([.hour, .minute], from: date)
         return (values.hour ?? 0) * 60 + (values.minute ?? 0)
+    }
+
+    /// Countdown displays keep the final partial second visible. Keeping this
+    /// conversion in one place prevents the menu bar and floating cow from
+    /// disagreeing around second boundaries.
+    private func countdownSeconds(_ interval: TimeInterval) -> Int {
+        max(Int(ceil(interval)), 0)
     }
 
 }

@@ -7,7 +7,6 @@
 
 enum ChinaWorkdayData {
     static let supportedYears = 2024...2026
-    static let coverageText = "已内置 2024–2026 年国务院安排"
 
     static let adjustedWorkdays: Set<Int> = [
         2024_02_04, 2024_02_18, 2024_04_07, 2024_04_28, 2024_05_11,

@@ -12,6 +12,15 @@ struct ScheduleSnapshot: Equatable {
 }
 
 enum Schedule {
+    /// Overnight plans stay completed through most of the off-duty period and
+    /// become waiting shortly before the next shift. Very short breaks split
+    /// their available time so both states remain meaningful.
+    static func overnightStandbyStartMinutes(startMinutes: Int, endMinutes: Int) -> Int {
+        let breakMinutes = max(startMinutes - endMinutes, 1)
+        let waitingMinutes = min(60, max(breakMinutes / 2, 1))
+        return startMinutes - waitingMinutes
+    }
+
     /// The civil date that owns the current shift. For an overnight plan,
     /// times before its end belong to the shift that started the previous day.
     static func workDate(
@@ -39,15 +48,47 @@ enum Schedule {
         let start = calendar.date(byAdding: .minute, value: startMinutes, to: dayStart) ?? dayStart
         var end = calendar.date(byAdding: .minute, value: endMinutes, to: dayStart) ?? dayStart
 
-        // A smaller/equal end time represents an overnight interval, e.g. 22:00–06:00.
-        if endMinutes <= startMinutes {
+        if endMinutes < startMinutes {
+            let standbyMinutes = overnightStandbyStartMinutes(
+                startMinutes: startMinutes,
+                endMinutes: endMinutes
+            )
+            let standbyStart = calendar.date(byAdding: .minute, value: standbyMinutes, to: dayStart) ?? start
+
+            if now < end {
+                return ScheduleSnapshot(
+                    phase: .running,
+                    remaining: max(end.timeIntervalSince(now), 0)
+                )
+            }
+
+            if now < standbyStart {
+                return ScheduleSnapshot(phase: .finished, remaining: 0)
+            }
+
+            if now < start {
+                return ScheduleSnapshot(
+                    phase: .waiting,
+                    remaining: start.timeIntervalSince(now)
+                )
+            }
+
+            let nextEnd = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+            return ScheduleSnapshot(
+                phase: .running,
+                remaining: max(nextEnd.timeIntervalSince(now), 0)
+            )
+        }
+
+        // Equal times represent one continuous 24-hour interval.
+        if endMinutes == startMinutes {
             end = calendar.date(byAdding: .day, value: 1, to: end) ?? end
         }
 
         var effectiveStart = start
         var effectiveEnd = end
 
-        if endMinutes <= startMinutes,
+        if endMinutes == startMinutes,
            let previousStart = calendar.date(byAdding: .day, value: -1, to: start),
            now < start,
            now >= previousStart {
@@ -86,6 +127,19 @@ enum Schedule {
         let dayStart = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .minute, value: startMinutes, to: dayStart) ?? dayStart
         let end = calendar.date(byAdding: .minute, value: endMinutes, to: dayStart) ?? dayStart
+
+        if endMinutes < startMinutes {
+            let standbyMinutes = overnightStandbyStartMinutes(
+                startMinutes: startMinutes,
+                endMinutes: endMinutes
+            )
+            let standbyStart = calendar.date(byAdding: .minute, value: standbyMinutes, to: dayStart) ?? start
+            if now < end { return end }
+            if now < standbyStart { return standbyStart }
+            if now < start { return start }
+            let tomorrow = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
+            return calendar.date(byAdding: .minute, value: endMinutes, to: tomorrow) ?? tomorrow
+        }
 
         if endMinutes > startMinutes {
             if now < start { return start }

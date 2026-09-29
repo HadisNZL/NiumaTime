@@ -129,7 +129,7 @@ private func loadDocument(year: Int, inputDirectory: URL?) throws -> HolidayDocu
             throw UpdateError.message("\(year).json 内的年份是 \(document.year)，已停止生成。")
         }
         guard !document.days.isEmpty, !document.papers.isEmpty else {
-            throw UpdateError.message("\(year).json 缺少日期或国务院公告来源。")
+            throw UpdateError.message("\(year) 年国务院安排尚未发布或数据源仍为空，已停止生成，现有数据不会被覆盖。")
         }
         return document
     } catch let error as UpdateError {
@@ -207,7 +207,6 @@ private func generatedSource(documents: [HolidayDocument], years: [Int]) throws 
 
     enum ChinaWorkdayData {
         static let supportedYears = \(firstYear)...\(lastYear)
-        static let coverageText = "已内置 \(firstYear)–\(lastYear) 年国务院安排"
 
         static let adjustedWorkdays: Set<Int> = \(formattedSet(adjusted))
 

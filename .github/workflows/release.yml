@@ -1,0 +1,50 @@
+name: 发布 macOS 安装包
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v4
+
+      - name: 校验版本标签
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "版本标签必须是 v3.0.1 这样的格式"
+            exit 1
+          fi
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: 运行测试
+        run: swift test --disable-sandbox
+
+      - name: 构建 Universal 安装包
+        run: |
+          APP_BUILD=$((1000 + GITHUB_RUN_NUMBER)) ./scripts/build-app.sh release
+
+      - name: 生成完整性校验文件
+        run: |
+          cd dist
+          shasum -a 256 "牛马日历-macOS-Universal.zip" > "牛马日历-macOS-Universal.zip.sha256"
+
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/牛马日历-macOS-Universal.zip" \
+            "dist/牛马日历-macOS-Universal.zip.sha256" \
+            --verify-tag \
+            --title "牛马日历 $APP_VERSION" \
+            --generate-notes

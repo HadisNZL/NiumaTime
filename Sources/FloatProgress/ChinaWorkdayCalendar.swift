@@ -34,7 +34,6 @@ enum ChinaWorkdayKind: Equatable {
 /// calculated, so the table only needs official holiday spans and makeup days.
 enum ChinaWorkdayCalendar {
     static let supportedYears = ChinaWorkdayData.supportedYears
-    static let coverageText = ChinaWorkdayData.coverageText
 
     static func kind(for date: Date, calendar: Calendar = .current) -> ChinaWorkdayKind {
         // Official schedules use Gregorian civil dates. Preserve the caller's

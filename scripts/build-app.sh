@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="${0:A:h:h}"
 APP_NAME="FloatProgress"
-APP_DISPLAY_NAME="牛马"
+APP_DISPLAY_NAME="牛马日历"
 BUILD_CONFIG="${1:-release}"
-APP_VERSION="${APP_VERSION:-2.2.0}"
-APP_BUILD="${APP_BUILD:-4}"
+APP_VERSION="${APP_VERSION:-3.0.0}"
+APP_BUILD="${APP_BUILD:-97}"
 BUNDLE_ID="${BUNDLE_ID:-com.local.FloatProgress}"
 SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -22,7 +22,10 @@ swift build --disable-sandbox -c "$BUILD_CONFIG" --arch x86_64
 
 ARM_BIN_DIR="$(swift build --disable-sandbox -c "$BUILD_CONFIG" --arch arm64 --show-bin-path)"
 INTEL_BIN_DIR="$(swift build --disable-sandbox -c "$BUILD_CONFIG" --arch x86_64 --show-bin-path)"
+rm -rf "$APP_DIR"
+rm -f "$ZIP_PATH"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 lipo -create \
     "$ARM_BIN_DIR/$APP_NAME" \
     "$INTEL_BIN_DIR/$APP_NAME" \
@@ -42,8 +45,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>FloatProgress</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-    <key>CFBundleName</key><string>牛马</string>
-    <key>CFBundleDisplayName</key><string>牛马</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleName</key><string>牛马日历</string>
+    <key>CFBundleDisplayName</key><string>牛马日历</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
     <key>CFBundleVersion</key><string>$APP_BUILD</string>

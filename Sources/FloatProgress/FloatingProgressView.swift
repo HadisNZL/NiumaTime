@@ -65,7 +65,7 @@ struct FloatingProgressView: View {
         let width = CowLayout.panelWidth(for: side, showsEars: model.showCowEars)
         let optics = CowOptics.values(for: side)
         let base = model.backgroundSwiftUIColor
-        let accent = cowAccentColor
+        let accent = model.accentSwiftUIColor
         let increasedContrast = colorSchemeContrast == .increased
         let outline = accent.opacity(increasedContrast ? 0.94 : 0.68)
         let outlineScale: CGFloat = increasedContrast ? 1.22 : 1
@@ -122,9 +122,9 @@ struct FloatingProgressView: View {
                 .frame(width: side * optics.patchWidth, height: side * optics.patchHeight)
                 .position(x: width / 2 - side * 0.205, y: side * 0.235)
 
-            eye(side: side, optics: optics, mood: mood, isLeft: true, color: mood == .relaxed ? accent : mood == .resting ? model.waitingLabelSwiftUIColor : model.centerLabelSwiftUIColor)
+            eye(side: side, optics: optics, mood: mood, isLeft: true, color: accent)
                 .position(x: width / 2 - side * optics.eyeX, y: eyeY(for: mood, side: side))
-            eye(side: side, optics: optics, mood: mood, isLeft: false, color: mood == .relaxed ? accent : mood == .resting ? model.waitingLabelSwiftUIColor : model.centerLabelSwiftUIColor)
+            eye(side: side, optics: optics, mood: mood, isLeft: false, color: accent)
                 .position(x: width / 2 + side * optics.eyeX, y: eyeY(for: mood, side: side))
 
             Ellipse()
@@ -367,12 +367,6 @@ struct FloatingProgressView: View {
 
     private var hoverTextColor: Color {
         isDisplayingWaiting ? model.waitingLabelSwiftUIColor : model.centerLabelSwiftUIColor
-    }
-
-    private var cowAccentColor: Color {
-        isDisplayingFinished
-            ? model.completedLabelSwiftUIColor
-            : model.accentSwiftUIColor
     }
 
     /// Rounding small marks to a physical-pixel boundary keeps eyes and

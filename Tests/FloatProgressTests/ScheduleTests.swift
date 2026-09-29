@@ -32,6 +32,26 @@ struct ScheduleTests {
         return chinaCalendar
     }
 
+    @Test func calendarPopoverKeepsOneMenuBarTopDistance() {
+        let hiddenCountdownFrame = NSRect(x: 571, y: 377, width: 436, height: 576)
+        let visibleCountdownFrame = NSRect(x: 507, y: 382, width: 436, height: 576)
+        let menuBarBottom: CGFloat = 949
+
+        let hiddenAligned = CalendarPopoverPlacement.aligningTopEdge(
+            of: hiddenCountdownFrame,
+            toMenuBarBottom: menuBarBottom
+        )
+        let visibleAligned = CalendarPopoverPlacement.aligningTopEdge(
+            of: visibleCountdownFrame,
+            toMenuBarBottom: menuBarBottom
+        )
+
+        #expect(hiddenAligned.maxY == menuBarBottom - CalendarPopoverPlacement.windowTopGap)
+        #expect(visibleAligned.maxY == hiddenAligned.maxY)
+        #expect(hiddenAligned.minX == hiddenCountdownFrame.minX)
+        #expect(visibleAligned.minX == visibleCountdownFrame.minX)
+    }
+
     @Test func runningDaySchedule() {
         let result = Schedule.snapshot(now: date(13, 30), startMinutes: 9 * 60, endMinutes: 18 * 60, calendar: calendar)
         #expect(result.phase == .running)
@@ -77,8 +97,16 @@ struct ScheduleTests {
         #expect(atEnd.phase == .finished)
         #expect(atEnd.remaining == 0)
 
+        let beforeStandby = Schedule.snapshot(now: date(20, 59, 59), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+        #expect(beforeStandby.phase == .finished)
+
+        let atStandby = Schedule.snapshot(now: date(21), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
+        #expect(atStandby.phase == .waiting)
+        #expect(atStandby.remaining == 3600)
+
         let beforeStart = Schedule.snapshot(now: date(21, 59, 59), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
-        #expect(beforeStart.phase == .finished)
+        #expect(beforeStart.phase == .waiting)
+        #expect(beforeStart.remaining == 1)
 
         let atStart = Schedule.snapshot(now: date(22), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
         #expect(atStart.phase == .running)
@@ -94,7 +122,8 @@ struct ScheduleTests {
         )
 
         #expect(Schedule.nextTransition(after: date(2), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar) == date(6))
-        #expect(Schedule.nextTransition(after: date(12), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar) == date(22))
+        #expect(Schedule.nextTransition(after: date(12), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar) == date(21))
+        #expect(Schedule.nextTransition(after: date(21, 30), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar) == date(22))
         #expect(
             Schedule.nextTransition(after: date(23), startMinutes: 22 * 60, endMinutes: 6 * 60, calendar: calendar)
                 == calendar.date(byAdding: .day, value: 1, to: date(6))
@@ -179,17 +208,26 @@ struct ScheduleTests {
     }
 
     @Test func previewDescriptionsFollowDaytimeSchedule() {
-        #expect(PreviewStateText.description(for: .resting, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "等待 · 00:00–09:00")
+        #expect(PreviewStateText.description(for: .resting, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "待命 · 00:00–09:00")
         #expect(PreviewStateText.description(for: .focused, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "工作 · 09:00–18:15")
         #expect(PreviewStateText.description(for: .expectant, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "临近 · 18:15–18:20（结束前 5 分钟）")
         #expect(PreviewStateText.description(for: .relaxed, startMinutes: 9 * 60, endMinutes: 18 * 60 + 20) == "完成 · 18:20 后至次日 00:00")
     }
 
     @Test func previewDescriptionsMarkOvernightSchedule() {
-        #expect(PreviewStateText.description(for: .resting, startMinutes: 22 * 60, endMinutes: 6 * 60) == "等待 · 跨夜计划不单独出现，班次外显示完成")
+        #expect(PreviewStateText.description(for: .resting, startMinutes: 22 * 60, endMinutes: 6 * 60) == "待命 · 21:00–22:00")
         #expect(PreviewStateText.description(for: .focused, startMinutes: 22 * 60, endMinutes: 6 * 60) == "工作 · 22:00–次日 05:55")
         #expect(PreviewStateText.description(for: .expectant, startMinutes: 22 * 60, endMinutes: 6 * 60) == "临近 · 次日 05:55–次日 06:00（结束前 5 分钟）")
-        #expect(PreviewStateText.description(for: .relaxed, startMinutes: 22 * 60, endMinutes: 6 * 60) == "完成 · 06:00–22:00")
+        #expect(PreviewStateText.description(for: .relaxed, startMinutes: 22 * 60, endMinutes: 6 * 60) == "完成 · 06:00–21:00")
+    }
+
+    @Test func shortOvernightBreakKeepsBothCompletedAndWaitingStates() {
+        let completed = Schedule.snapshot(now: date(21, 15), startMinutes: 22 * 60, endMinutes: 21 * 60, calendar: calendar)
+        #expect(completed.phase == .finished)
+
+        let waiting = Schedule.snapshot(now: date(21, 30), startMinutes: 22 * 60, endMinutes: 21 * 60, calendar: calendar)
+        #expect(waiting.phase == .waiting)
+        #expect(waiting.remaining == 30 * 60)
     }
 
     @Test func previewDescriptionsHandleShortSchedule() {
@@ -221,6 +259,27 @@ struct ScheduleTests {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
+    @Test @MainActor func menuBarCanAdvanceIndependentlyFromTheFloatingPresentationClock() {
+        let suiteName = "FloatProgressTests.independentMenuBarClock"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
+        model.startMinutes = 9 * 60
+        model.endMinutes = 18 * 60
+        model.now = Calendar.current.date(byAdding: .hour, value: 12, to: today)!
+
+        let later = Calendar.current.date(
+            byAdding: .second,
+            value: 13 * 60 + 45,
+            to: model.now
+        )!
+        #expect(model.compactStatusText(at: later, showSeconds: true) == "05:46:15")
+        #expect(model.compactStatusText(at: later, showSeconds: false) == "05:47")
+        #expect(model.calendarStatusText == "剩余 06小时00分")
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     @Test @MainActor func hiddenSecondsDoNotShowZeroBeforeCompletion() {
         let suiteName = "FloatProgressTests.shortRemainingWithoutSeconds"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -228,12 +287,11 @@ struct ScheduleTests {
         let model = ProgressModel(defaults: defaults)
         model.showSeconds = false
 
-        #expect(model.format(59) == "00小时01分")
-
         let today = Calendar.current.startOfDay(for: currentCalendarDate(2026, 9, 23))
         model.startMinutes = 9 * 60
         model.endMinutes = 9 * 60 + 1
         model.now = Calendar.current.date(byAdding: .second, value: 30, to: Calendar.current.date(byAdding: .minute, value: 9 * 60, to: today)!)!
+        #expect(model.statusText == "剩余 00小时01分")
         #expect(model.compactStatusText == "00:01")
         defaults.removePersistentDomain(forName: suiteName)
     }
@@ -265,6 +323,32 @@ struct ScheduleTests {
         model.now = end
         #expect(model.finalMinuteSeconds == nil)
         #expect(model.snapshot.phase == .finished)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func menuBarAndFloatingCowUseTheSamePartialSecondRounding() {
+        let suiteName = "FloatProgressTests.sharedCountdownRounding"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: currentCalendarDate(2026, 9, 23))
+        let end = calendar.date(byAdding: .minute, value: 10 * 60, to: today)!
+        model.startMinutes = 9 * 60
+        model.endMinutes = 10 * 60
+        model.showSeconds = true
+
+        model.now = end.addingTimeInterval(-59.4)
+        #expect(model.finalMinuteSeconds == 60)
+        #expect(model.compactStatusText == "00:01:00")
+
+        model.now = end.addingTimeInterval(-1.2)
+        #expect(model.finalMinuteSeconds == 2)
+        #expect(model.compactStatusText == "00:00:02")
+
+        model.now = end.addingTimeInterval(-0.2)
+        #expect(model.finalMinuteSeconds == 1)
+        #expect(model.compactStatusText == "00:00:01")
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -308,22 +392,82 @@ struct ScheduleTests {
         model.waitingLabelRGB = 0x123456
         model.completedLabelRGB = 0x654321
         model.accentRGB = 0xABCDEF
+        model.calendarAccentRGB = 0x123ABC
         model.showCowEars = false
         model.centerLabel = "搬砖"
         model.waitingLabel = "准备"
+        model.completedLabel = "收工"
 
         model.resetAppearanceDefaults()
 
         #expect(model.widgetSize == 62)
         #expect(model.panelOpacity == 0.9)
-        #expect(model.showCowEars)
+        #expect(!model.showCowEars)
         #expect(model.backgroundRGB == 0xE9ECF5)
-        #expect(model.centerLabelRGB == 0x4338CA)
-        #expect(model.waitingLabelRGB == 0x4338CA)
-        #expect(model.completedLabelRGB == 0x059669)
+        #expect(model.centerLabelRGB == 0x123456)
+        #expect(model.waitingLabelRGB == 0x123456)
+        #expect(model.completedLabelRGB == 0x654321)
         #expect(model.accentRGB == 0x5856D6)
+        #expect(model.calendarAccentRGB == 0x123ABC)
         #expect(model.centerLabel == "搬砖")
         #expect(model.waitingLabel == "准备")
+        #expect(model.completedLabel == "收工")
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func resetTextKeepsFloatingAppearanceSettings() {
+        let suiteName = "FloatProgressTests.resetText"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        model.waitingLabel = "准备"
+        model.centerLabel = "搬砖"
+        model.completedLabel = "收工"
+        model.waitingLabelRGB = 0x111111
+        model.centerLabelRGB = 0x222222
+        model.completedLabelRGB = 0x333333
+        model.widgetSize = 80
+        model.panelOpacity = 0.5
+        model.backgroundRGB = 0x445566
+        model.accentRGB = 0x778899
+
+        model.resetTextDefaults()
+
+        #expect(model.waitingLabel == "待命")
+        #expect(model.centerLabel == "牛马")
+        #expect(model.completedLabel == "下班")
+        #expect(model.waitingLabelRGB == 0x4338CA)
+        #expect(model.centerLabelRGB == 0x4338CA)
+        #expect(model.completedLabelRGB == 0x059669)
+        #expect(model.widgetSize == 80)
+        #expect(model.panelOpacity == 0.5)
+        #expect(model.backgroundRGB == 0x445566)
+        #expect(model.accentRGB == 0x778899)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test @MainActor func countdownMasterSwitchPreservesChildDisplayPreferences() {
+        let suiteName = "FloatProgressTests.countdownMasterSwitch"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        #expect(model.countdownEnabled)
+
+        model.showFloatingPanel = true
+        model.showMenuBarRemaining = true
+        model.countdownEnabled = false
+        #expect(!model.isFloatingPanelActive)
+        #expect(!model.isMenuBarCountdownActive)
+        #expect(model.showFloatingPanel)
+        #expect(model.showMenuBarRemaining)
+
+        let restored = ProgressModel(defaults: defaults)
+        #expect(!restored.countdownEnabled)
+        #expect(restored.showFloatingPanel)
+        #expect(restored.showMenuBarRemaining)
+        restored.countdownEnabled = true
+        #expect(restored.isFloatingPanelActive)
+        #expect(restored.isMenuBarCountdownActive)
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -587,18 +731,156 @@ struct ScheduleTests {
         #expect(abs(CowOptics.values(for: 61.99).nostrilDiameter - CowOptics.values(for: 62.01).nostrilDiameter) < 0.001)
     }
 
-    @Test @MainActor func statusBarCowIconIsOneCachedTemplateImage() {
-        let icon = StatusBarCowIcon.image
+    @Test @MainActor func statusBarCalendarIconShowsTheCurrentDayAsATemplateImage() {
+        let iconDate = chinaDate(2026, 9, 24)
+        let icon = StatusBarCalendarIcon.image(for: iconDate, calendar: chinaCalendar)
         #expect(icon.isTemplate)
-        #expect(icon.size.width == 18)
+        #expect(icon.size.width == 19)
         #expect(icon.size.height == 18)
-        #expect(icon === StatusBarCowIcon.image)
-        #expect(StatusBarCowIcon.countdownFont === StatusBarCowIcon.countdownFont)
+        #expect(icon.accessibilityDescription == "日历，24日")
+        #expect(StatusBarCalendarIcon.countdownFont === StatusBarCalendarIcon.countdownFont)
 
-        let attributes: [NSAttributedString.Key: Any] = [.font: StatusBarCowIcon.countdownFont]
+        let attributes: [NSAttributedString.Key: Any] = [.font: StatusBarCalendarIcon.countdownFont]
         let narrowDigits = NSAttributedString(string: " 11:11:11", attributes: attributes).size().width
         let wideDigits = NSAttributedString(string: " 88:88:88", attributes: attributes).size().width
         #expect(abs(narrowDigits - wideDigits) < 0.001)
+
+    }
+
+    @Test func calendarMonthBuildsAMondayFirstSixWeekGrid() {
+        let february = CalendarMonth.make(containing: chinaDate(2024, 2, 15), calendar: chinaCalendar)
+        #expect(february.days.count == 42)
+        #expect(february.days.filter(\.isInDisplayedMonth).count == 29)
+        #expect(chinaCalendar.component(.weekday, from: february.days.first!.date) == 2)
+        #expect(chinaCalendar.component(.weekday, from: february.days.last!.date) == 1)
+        #expect(february.workdayCount + february.restDayCount == 29)
+    }
+
+    @Test func calendarMonthCanUseSundayAsTheFirstWeekday() {
+        let february = CalendarMonth.make(
+            containing: chinaDate(2024, 2, 15),
+            firstWeekday: 1,
+            calendar: chinaCalendar
+        )
+        #expect(february.days.count == 42)
+        #expect(chinaCalendar.component(.weekday, from: february.days.first!.date) == 1)
+        #expect(chinaCalendar.component(.weekday, from: february.days.last!.date) == 7)
+    }
+
+    @Test func calendarMonthSelectionIsLimitedToTheSupportedSolarTermRange() {
+        #expect(CalendarMonth.supportedYears == 1900...2100)
+        #expect(CalendarMonth.monthStart(year: 1900, month: 1, calendar: chinaCalendar) == chinaDate(1900, 1, 1, 0))
+        #expect(CalendarMonth.monthStart(year: 2100, month: 12, calendar: chinaCalendar) == chinaDate(2100, 12, 1, 0))
+        #expect(CalendarMonth.monthStart(year: 1899, month: 12, calendar: chinaCalendar) == nil)
+        #expect(CalendarMonth.monthStart(year: 2101, month: 1, calendar: chinaCalendar) == nil)
+        #expect(CalendarMonth.monthStart(year: 2026, month: 13, calendar: chinaCalendar) == nil)
+    }
+
+    @Test func returningToTheCurrentMonthSelectsToday() {
+        let today = chinaDate(2026, 9, 28, 18)
+        let currentMonth = chinaDate(2026, 9, 1, 0)
+        let otherMonth = chinaDate(2026, 8, 1, 0)
+
+        #expect(
+            CalendarMonth.selectionDate(
+                forDisplayedMonth: currentMonth,
+                today: today,
+                calendar: chinaCalendar
+            ) == chinaDate(2026, 9, 28, 0)
+        )
+        #expect(
+            CalendarMonth.selectionDate(
+                forDisplayedMonth: otherMonth,
+                today: today,
+                calendar: chinaCalendar
+            ) == otherMonth
+        )
+    }
+
+    @Test @MainActor func calendarDisplayPreferencesPersistButSelectedSettingsTabDoesNot() {
+        let suiteName = "FloatProgressTests.calendarPreferences"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let model = ProgressModel(defaults: defaults)
+        #expect(model.settingsTab == .calendar)
+
+        model.calendarFirstWeekday = 1
+        model.showLunarDetails = false
+        model.showWorkdayBadges = false
+        model.showMonthSummary = false
+        model.showMenuBarRemaining = false
+        model.calendarAccentRGB = 0x2563EB
+        model.settingsTab = .countdown
+
+        let restored = ProgressModel(defaults: defaults)
+        #expect(restored.calendarFirstWeekday == 1)
+        #expect(!restored.showLunarDetails)
+        #expect(!restored.showWorkdayBadges)
+        #expect(!restored.showMonthSummary)
+        #expect(!restored.showMenuBarRemaining)
+        #expect(restored.calendarAccentRGB == 0x2563EB)
+        #expect(restored.accentRGB == 0x5856D6)
+        #expect(restored.settingsTab == .calendar)
+
+        model.settingsTab = .about
+        #expect(ProgressModel(defaults: defaults).settingsTab == .calendar)
+
+        restored.resetCalendarDisplayDefaults()
+        #expect(restored.calendarFirstWeekday == 2)
+        #expect(restored.showLunarDetails)
+        #expect(restored.showWorkdayBadges)
+        #expect(restored.showMonthSummary)
+        #expect(!restored.showMenuBarRemaining)
+        #expect(restored.calendarAccentRGB == 0x5856D6)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test func appVersionComparisonHandlesReleaseTagsAndMissingComponents() {
+        #expect(AppVersionComparison.isNewer("v3.0.1", than: "3.0.0"))
+        #expect(AppVersionComparison.isNewer("3.1", than: "3.0.9"))
+        #expect(!AppVersionComparison.isNewer("3.0", than: "3.0.0"))
+        #expect(!AppVersionComparison.isNewer("v2.9.9", than: "3.0.0"))
+        #expect(!AppVersionComparison.isNewer("未知", than: "3.0.0"))
+    }
+
+    @Test func updateDownloadPrefersUniversalArchiveAndMatchingChecksum() throws {
+        let intel = AppReleaseAsset(
+            name: "牛马日历-Intel.zip",
+            downloadURL: URL(string: "https://example.com/intel.zip")!
+        )
+        let universal = AppReleaseAsset(
+            name: "牛马日历-macOS-Universal.zip",
+            downloadURL: URL(string: "https://example.com/universal.zip")!
+        )
+        let checksum = AppReleaseAsset(
+            name: "牛马日历-macOS-Universal.zip.sha256",
+            downloadURL: URL(string: "https://example.com/universal.sha256")!
+        )
+
+        let selected = AppUpdateChecker.preferredDownloadAssets(in: [intel, checksum, universal])
+        #expect(selected?.archive == universal)
+        #expect(selected?.checksum == checksum)
+
+        let hash = String(repeating: "a", count: 64)
+        #expect(try AppUpdateChecker.expectedSHA256(from: Data("\(hash)  package.zip\n".utf8)) == hash)
+        #expect(throws: AppUpdateError.self) {
+            try AppUpdateChecker.expectedSHA256(from: Data("not-a-checksum".utf8))
+        }
+    }
+
+    @Test func calendarDaysCombineLunarTermsAndOfficialWorkdayMarkers() {
+        let february = CalendarMonth.make(containing: chinaDate(2026, 2, 17), calendar: chinaCalendar)
+        let springFestival = february.days.first { chinaCalendar.isDate($0.date, inSameDayAs: chinaDate(2026, 2, 17)) }
+        #expect(springFestival?.festival == "春节")
+        #expect(springFestival?.workdayKind == .publicHoliday)
+
+        let september = CalendarMonth.make(containing: chinaDate(2026, 9, 23), calendar: chinaCalendar)
+        let autumnEquinox = september.days.first { chinaCalendar.isDate($0.date, inSameDayAs: chinaDate(2026, 9, 23)) }
+        let makeupDay = september.days.first { chinaCalendar.isDate($0.date, inSameDayAs: chinaDate(2026, 9, 20)) }
+        #expect(autumnEquinox?.solarTerm == "秋分")
+        #expect(makeupDay?.workdayKind == .adjustedWorkday)
+        #expect(CalendarMonth.nextOfficialRestDay(after: chinaDate(2026, 9, 24), calendar: chinaCalendar) == chinaDate(2026, 9, 25, 0))
+        #expect(ChineseCalendarText.fullText(for: chinaDate(2026, 9, 24), calendar: chinaCalendar) == "丙午年（马）八月十四")
     }
 
     @Test func appearanceContrastWarnsWithoutChangingColors() {
