@@ -1,10 +1,40 @@
 import AppKit
+import CoreText
 
 enum StatusBarCalendarIcon {
+    private static let dayNumberCenter = NSPoint(x: 9.5, y: 7.35)
+
     @MainActor static let countdownFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize,
         weight: .regular
     )
+
+    static func centeredDayGlyphPath(for value: String, font: NSFont) -> CGPath {
+        let characters = Array(value.utf16)
+        var glyphs = Array(repeating: CGGlyph(), count: characters.count)
+        let ctFont = font as CTFont
+        CTFontGetGlyphsForCharacters(ctFont, characters, &glyphs, characters.count)
+
+        var advances = Array(repeating: CGSize.zero, count: glyphs.count)
+        CTFontGetAdvancesForGlyphs(ctFont, .horizontal, glyphs, &advances, glyphs.count)
+
+        let path = CGMutablePath()
+        var x: CGFloat = 0
+        for (index, glyph) in glyphs.enumerated() {
+            if let glyphPath = CTFontCreatePathForGlyph(ctFont, glyph, nil) {
+                let placement = CGAffineTransform(translationX: x, y: 0)
+                path.addPath(glyphPath, transform: placement)
+            }
+            x += advances[index].width
+        }
+
+        let bounds = path.boundingBoxOfPath
+        var centering = CGAffineTransform(
+            translationX: dayNumberCenter.x - bounds.midX,
+            y: dayNumberCenter.y - bounds.midY
+        )
+        return path.copy(using: &centering) ?? path
+    }
 
     static func image(for date: Date, calendar: Calendar = .current) -> NSImage {
         let day = calendar.component(.day, from: date)
@@ -37,17 +67,10 @@ enum StatusBarCalendarIcon {
             paper.lineJoinStyle = .round
             paper.stroke()
 
-            let value = String(day) as NSString
+            let value = String(day)
             let font = NSFont.monospacedDigitSystemFont(ofSize: day < 10 ? 12.2 : 10.6, weight: .bold)
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: NSColor.black
-            ]
-            let size = value.size(withAttributes: attributes)
-            value.draw(
-                at: NSPoint(x: (19 - size.width) / 2, y: 1.65),
-                withAttributes: attributes
-            )
+            NSGraphicsContext.current?.cgContext.addPath(centeredDayGlyphPath(for: value, font: font))
+            NSGraphicsContext.current?.cgContext.fillPath()
             return true
         }
         image.isTemplate = true

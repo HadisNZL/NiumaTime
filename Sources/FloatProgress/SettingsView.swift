@@ -619,6 +619,7 @@ private struct AboutAndUpdateSettings: View {
     @State private var downloadTask: Task<Void, Never>?
     @State private var downloadedUpdateURL: URL?
     @State private var downloadError: String?
+    @State private var showDownloadCompletion = false
 
     var body: some View {
         Form {
@@ -736,6 +737,15 @@ private struct AboutAndUpdateSettings: View {
         }
         .formStyle(.grouped)
         .padding(6)
+        .alert("更新包已下载", isPresented: $showDownloadCompletion) {
+            Button("在 Finder 中显示") {
+                guard let downloadedUpdateURL else { return }
+                NSWorkspace.shared.activateFileViewerSelecting([downloadedUpdateURL])
+            }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("文件已经过完整性校验。请退出当前版本，解压安装包，再把“牛马日历”拖入“应用程序”并选择替换。")
+        }
         .onDisappear {
             updateTask?.cancel()
             updateTask = nil
@@ -781,6 +791,7 @@ private struct AboutAndUpdateSettings: View {
         downloadTask = nil
         downloadedUpdateURL = nil
         downloadError = nil
+        showDownloadCompletion = false
         updateState = .checking
         updateTask = Task {
             do {
@@ -808,7 +819,7 @@ private struct AboutAndUpdateSettings: View {
                 guard !Task.isCancelled else { return }
                 downloadedUpdateURL = url
                 downloadTask = nil
-                NSWorkspace.shared.activateFileViewerSelecting([url])
+                showDownloadCompletion = true
             } catch is CancellationError {
                 downloadTask = nil
             } catch {

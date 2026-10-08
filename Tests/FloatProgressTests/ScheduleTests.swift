@@ -747,6 +747,19 @@ struct ScheduleTests {
 
     }
 
+    @Test func statusBarCalendarDayUsesItsVisibleGlyphBoundsForCentering() {
+        for day in ["8", "24", "31"] {
+            let font = NSFont.monospacedDigitSystemFont(
+                ofSize: day.count == 1 ? 12.2 : 10.6,
+                weight: .bold
+            )
+            let bounds = StatusBarCalendarIcon.centeredDayGlyphPath(for: day, font: font).boundingBoxOfPath
+
+            #expect(abs(bounds.midX - 9.5) < 0.001)
+            #expect(abs(bounds.midY - 7.35) < 0.001)
+        }
+    }
+
     @Test func calendarMonthBuildsAMondayFirstSixWeekGrid() {
         let february = CalendarMonth.make(containing: chinaDate(2024, 2, 15), calendar: chinaCalendar)
         #expect(february.days.count == 42)
@@ -849,11 +862,11 @@ struct ScheduleTests {
             downloadURL: URL(string: "https://example.com/intel.zip")!
         )
         let universal = AppReleaseAsset(
-            name: "牛马日历-macOS-Universal.zip",
+            name: "NiumaCalendar-macOS-Universal.zip",
             downloadURL: URL(string: "https://example.com/universal.zip")!
         )
         let checksum = AppReleaseAsset(
-            name: "牛马日历-macOS-Universal.zip.sha256",
+            name: "NiumaCalendar-macOS-Universal.zip.sha256",
             downloadURL: URL(string: "https://example.com/universal.sha256")!
         )
 

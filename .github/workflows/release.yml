@@ -59,15 +59,15 @@ jobs:
       - name: 生成完整性校验文件
         run: |
           cd dist
-          shasum -a 256 "牛马日历-macOS-Universal.zip" > "牛马日历-macOS-Universal.zip.sha256"
+          shasum -a 256 "NiumaCalendar-macOS-Universal.zip" > "NiumaCalendar-macOS-Universal.zip.sha256"
 
       - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$RELEASE_TAG" \
-            "dist/牛马日历-macOS-Universal.zip" \
-            "dist/牛马日历-macOS-Universal.zip.sha256" \
+            "dist/NiumaCalendar-macOS-Universal.zip" \
+            "dist/NiumaCalendar-macOS-Universal.zip.sha256" \
             --verify-tag \
             --title "牛马日历 $APP_VERSION" \
             --generate-notes

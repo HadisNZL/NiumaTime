@@ -31,7 +31,7 @@ open dist/牛马日历.app
 构建结果：
 
 - `dist/牛马日历.app`
-- `dist/牛马日历-macOS-Universal.zip`
+- `dist/NiumaCalendar-macOS-Universal.zip`
 
 两份产物均同时支持 `arm64` 与 `x86_64`。默认使用临时签名，其他 Mac 首次运行时可能需要在 Finder 中右键应用并选择“打开”。
 
@@ -68,5 +68,7 @@ git push origin v3.0.1
 ```
 
 GitHub Actions 会自动测试、构建 Universal App、生成 SHA-256 校验文件并创建 GitHub Release。应用内“检查更新”将读取最新正式 Release。
+
+发现新版本后，可在应用内下载并自动校验安装包。下载完成时选择“在 Finder 中显示”，退出正在运行的旧版本，解压后将“牛马日历”拖入“应用程序”并选择替换。
 
 版本标签使用 `v主版本.次版本.修订号` 格式，例如 `v3.1.0`。当前没有 Developer ID，因此发布包仍为临时签名；以后加入签名与公证凭据即可升级正式分发流程。
