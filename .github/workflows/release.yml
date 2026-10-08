@@ -16,14 +16,23 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
+    env:
+      # 固定与本机正式构建相同的工具链，避免 SwiftUI 随 GitHub 默认 SDK 改变外观。
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
     steps:
       - name: 获取代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: 确认固定构建环境
+        run: |
+          xcodebuild -version
+          swift --version
+          echo "macOS SDK $(xcrun --sdk macosx --show-sdk-version)"
 
       - name: 校验版本标签
         run: |
